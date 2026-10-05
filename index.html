@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLESS PRAISE Portal - San Vicente NHS</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: { 50: '#f0f5ff', 100: '#e5edff', 200: '#cddbfe', 500: '#3b82f6', 600: '#1d4ed8', 800: '#1e3a8a', 900: '#0d2342', 950: '#061325' },
+          depedGold: { 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706' }
+        },
+        fontFamily: {
+          sans: ['"Public Sans"', 'system-ui', 'sans-serif'],
+          serif: ['"Playfair Display"', 'Georgia', 'serif']
+        }
+      }
+    }
+  }
+</script>
+<style>
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  @media print { .no-print { display: none !important; } body { background: white !important; } }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+
+<header class="bg-gradient-to-r from-brand-950 via-brand-900 to-brand-950 text-white border-b-4 border-depedGold-500 shadow-md sticky top-0 z-40">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="w-12 h-12 rounded-full bg-white p-0.5 border-2 border-depedGold-400 shadow flex-shrink-0 overflow-hidden">
+        <img src="logo.png" alt="BLESS seal" class="w-full h-full object-contain rounded-full">
+      </div>
+      <div class="min-w-0">
+        <div class="text-[10px] sm:text-xs tracking-wider uppercase font-semibold text-slate-300">DepEd Region XI <span class="text-depedGold-400">•</span> SDO Panabo City</div>
+        <h1 class="text-base sm:text-lg font-bold leading-tight">San Vicente National High School
+          <span class="hidden sm:inline ml-1 align-middle bg-depedGold-500/20 text-depedGold-400 text-[11px] px-2 py-0.5 rounded border border-depedGold-500/40">BLESS PRAISE</span>
+        </h1>
+      </div>
+    </div>
+    <div id="userbox" class="flex items-center gap-2 text-xs"></div>
+  </div>
+</header>
+
+<nav id="tabs" class="no-print bg-white border-b border-slate-200 hidden">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto"></div>
+</nav>
+
+<main id="main" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full flex-1">
+  <div class="py-24 text-center text-slate-400 text-sm">Loading…</div>
+</main>
+
+<footer class="no-print bg-white border-t border-slate-200 py-5 text-slate-500 text-xs">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
+    <span>San Vicente National High School • SDO Panabo City • Region XI</span>
+    <span><strong class="text-brand-900">B</strong>uilding <strong class="text-brand-900">L</strong>eadership, <strong class="text-brand-900">E</strong>xcellence &amp; <strong class="text-brand-900">S</strong>teadfast <strong class="text-brand-900">S</strong>ervice</span>
+  </div>
+</footer>
+
+<div id="modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm"></div>
+
+<div id="toast" class="fixed bottom-5 right-5 z-50 translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 text-white text-xs px-4 py-3 rounded-xl shadow-xl flex items-center gap-2">
+  <span id="toast-dot" class="w-2 h-2 rounded-full bg-emerald-400"></span>
+  <span id="toast-message"></span>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

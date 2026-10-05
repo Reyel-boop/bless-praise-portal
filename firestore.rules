@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// BLESS PRAISE Portal — paste into Firebase console → Firestore Database → Rules → Publish.
+//
+// Collections
+//   admins/{email}        Admin list. Add documents by hand in the console (ID = lowercase email).
+//   users/{uid}           Awardee profile (name, position, department).
+//   applications/{uid}    The awardee's chosen award, ticked MOVs and Drive links.
+//   reviews/{uid}         Committee decision: verified MOVs, status, remarks. Admins only.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function isAdmin() {
+      return verified() && exists(/databases/$(database)/documents/admins/$(request.auth.token.email));
+    }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function isSelf(uid) { return verified() && request.auth.uid == uid; }
+
+    function awardKeys() {
+      return ['cat-teach-1', 'cat-teach-2', 'cat-teach-3', 'cat-teach-4', 'cat-teach-5', 'cat-teach-6', 'cat-teach-7',
+              'cat-nonteach-1', 'cat-nonteach-2', 'cat-nonteach-3', 'cat-nonteach-4',
+              'cat-special-1', 'cat-special-2'];
+    }
+
+    function validApplication(uid) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['uid', 'name', 'dept', 'award', 'items', 'submittedAt', 'endorser', 'createdAt', 'updatedAt'])
+        && d.uid == uid
+        && d.award in awardKeys()
+        && d.items is map
+        && d.name is string && d.name.size() <= 120
+        && d.dept is string && d.dept.size() <= 120;
+    }
+
+    // Admin list: each user may only check their own email. Nobody writes it from the site.
+    match /admins/{email} {
+      allow get: if signedIn() && request.auth.token.email == email;
+      allow list, write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['name', 'position', 'dept', 'email', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120;
+      allow delete: if false;
+    }
+
+    match /applications/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow create: if isSelf(uid) && validApplication(uid);
+      // The award is locked once the application is submitted.
+      allow update: if isSelf(uid) && validApplication(uid)
+        && (resource.data.get('submittedAt', null) == null
+            || request.resource.data.award == resource.data.award);
+      allow delete: if false;
+    }
+
+    match /reviews/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}
