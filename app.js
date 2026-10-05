@@ -4,7 +4,7 @@ import {
   sendEmailVerification, sendPasswordResetEmail, signOut, updateProfile
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, serverTimestamp
+  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, serverTimestamp, writeBatch, Bytes
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL } from "./data.js";
@@ -13,8 +13,10 @@ import { CATEGORIES, AWARD_GROUPS, GENERAL } from "./data.js";
 const $ = (s) => document.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const safeUrl = (u) => (/^https:\/\/\S+$/i.test(u || "") ? u : "");
 const icons = () => window.lucide && window.lucide.createIcons();
+const MAX_PDF_MB = 5;
+const hasPdf = (it) => !!(it && it.file && it.file.path);
+const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
 const fmtDate = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—");
 
 let toastTimer;
@@ -38,7 +40,9 @@ function errorText(e) {
     "auth/invalid-email": "Enter a valid email address.",
     "auth/too-many-requests": "Too many tries. Wait a minute, then try again.",
     "auth/network-request-failed": "No internet connection. Check it and try again.",
-    "permission-denied": "You don't have permission to do that."
+    "permission-denied": "You don't have permission to do that.",
+    "unavailable": "No internet connection. Check it and try again.",
+    "resource-exhausted": "Storage is full for today. Try again tomorrow or tell the admin."
   })[code] || (e && e.message) || "Something went wrong. Try again.";
 }
 
@@ -76,7 +80,7 @@ function progress(app, review) {
   const ver = (review && review.verified) || {};
   return {
     total: rows.length,
-    sub: rows.filter((r) => items[r.key] && items[r.key].submitted).length,
+    sub: rows.filter((r) => hasPdf(items[r.key])).length,
     ver: rows.filter((r) => ver[r.key]).length
   };
 }
@@ -117,7 +121,8 @@ const state = {
   app: null, review: null, loaded: false,
   apps: {}, reviews: {}, selected: null, drafts: {},
   filter: { q: "", award: "", status: "" },
-  tab: "main", authMode: "login", unsubs: []
+  tab: "main", authMode: "login", unsubs: [],
+  uploads: {}, uploadKey: null
 };
 let auth, db;
 
@@ -414,28 +419,44 @@ function renderAwardee() {
 
   const part = (cat, heading) => {
     const list = CATEGORIES[cat].items;
-    const done = list.filter((_, i) => items[`${cat}_${i}`] && items[`${cat}_${i}`].submitted).length;
+    const done = list.filter((_, i) => hasPdf(items[`${cat}_${i}`])).length;
     return `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
         <h3 class="text-sm font-bold text-slate-800">${heading}</h3>
-        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} ticked</span>
+        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} uploaded</span>
       </div>
       <div class="divide-y divide-slate-100">
         ${list.map((text, i) => {
           const key = `${cat}_${i}`;
           const it = items[key] || {};
-          const link = it.link || "";
           const ok = ver[key];
+          const up = state.uploads[key];
+          const has = hasPdf(it);
+          let fileUi;
+          if (up !== undefined) {
+            fileUi = `<div class="flex items-center gap-2">
+                <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden"><div id="upbar-${key}" class="h-full rounded-full bg-blue-600 transition-all" style="width:${up}%"></div></div>
+                <span id="uppct-${key}" class="tabular text-xs font-bold text-blue-700 w-10 text-right">${up}%</span>
+              </div>`;
+          } else if (has) {
+            fileUi = `<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <button data-act="view" data-uid="${esc(state.user.uid)}" data-key="${key}" class="inline-flex items-center gap-1.5 min-w-0 max-w-full font-semibold text-red-700 hover:underline">
+                  <i data-lucide="file-text" class="w-4 h-4 flex-shrink-0"></i><span class="truncate">${esc(it.file.name)}</span></button>
+                <span class="text-slate-400 tabular">${fmtSize(it.file.size || 0)}</span>
+                ${locked ? "" : `<button data-act="upload" data-key="${key}" class="font-semibold text-blue-700 hover:underline">Replace</button>
+                <button data-act="remove" data-key="${key}" class="font-semibold text-slate-500 hover:text-red-700">Remove</button>`}
+              </div>`;
+          } else {
+            fileUi = locked
+              ? `<span class="text-xs text-slate-400">No PDF uploaded</span>`
+              : `<button data-act="upload" data-key="${key}" class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border-2 border-dashed border-blue-300 text-blue-700 bg-blue-50/50 hover:bg-blue-50 hover:border-blue-500 transition">
+                  <i data-lucide="upload" class="w-3.5 h-3.5"></i>Upload PDF</button>`;
+          }
           return `<div class="p-3 sm:px-4 flex gap-3 items-start ${ok ? "bg-emerald-50/60" : ""}">
-            <input type="checkbox" id="tick-${key}" data-act="tick" data-key="${key}" ${it.submitted ? "checked" : ""} ${locked ? "disabled" : ""}
-              class="mt-0.5 w-5 h-5 rounded border-2 border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer flex-shrink-0" aria-label="Mark as submitted">
+            <span class="mt-0.5 w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${has ? "bg-blue-600 text-white" : "border-2 border-slate-300 text-transparent"}"><i data-lucide="check" class="w-4 h-4"></i></span>
             <div class="flex-1 min-w-0">
-              <label for="tick-${key}" class="block text-sm font-medium text-slate-800 cursor-pointer"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</label>
-              <div class="mt-1.5 flex items-center gap-2">
-                <input id="link-${key}" data-act="link" data-key="${key}" type="url" value="${esc(link)}" placeholder="Paste Google Drive link" ${locked ? "disabled" : ""}
-                  class="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-md border ${link && !safeUrl(link) ? "border-red-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50">
-                ${safeUrl(link) ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer" class="text-xs font-semibold text-blue-700 hover:underline flex-shrink-0">Open</a>` : ""}
-              </div>
+              <div class="text-sm font-medium text-slate-800"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
+              <div class="mt-1.5">${fileUi}</div>
             </div>
             ${ok
               ? `<span class="flex-shrink-0 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white"><i data-lucide="check-check" class="w-3 h-3"></i>Verified</span>`
@@ -455,7 +476,7 @@ function renderAwardee() {
           ${a.local ? `<div class="font-serif italic text-depedGold-600">${esc(a.local)}</div>` : ""}
           <div class="mt-2">${pill(st)}</div>
         </div>
-        ${bar("Ticked", p.sub, p.total, BLUE)}
+        ${bar("Uploaded", p.sub, p.total, BLUE)}
         ${bar("Verified", p.ver, p.total, GREEN)}
         ${!app.submittedAt
           ? `<div class="flex flex-col gap-2 pt-1">
@@ -463,14 +484,15 @@ function renderAwardee() {
                 <i data-lucide="send" class="w-4 h-4"></i>Submit for review</button>
               <button data-act="change-award" class="text-xs font-semibold text-slate-500 hover:text-slate-800">Change award</button>
             </div>`
-          : `<div class="text-xs text-slate-500 border-t border-slate-100 pt-3">Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}${locked ? "" : `<br><span class="text-sky-700">You can still add links if the committee asks.</span>`}</div>`}
+          : `<div class="text-xs text-slate-500 border-t border-slate-100 pt-3">Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}${locked ? "" : `<br><span class="text-sky-700">You can still upload PDFs if the committee asks.</span>`}</div>`}
       </div>
       ${review && review.remarks ? `<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4">
         <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5"><i data-lucide="message-square" class="w-3.5 h-3.5"></i>Committee remarks</div>
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
       </div>` : ""}
       <div class="rounded-2xl bg-gradient-to-br from-brand-900 to-slate-900 text-white p-4 text-xs">
-        <span class="text-blue-300 font-bold">Ticked</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
+        <span class="text-blue-300 font-bold">Uploaded</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
+        <div class="mt-1.5 text-slate-300"><strong class="text-white">PDF only</strong> · max ${MAX_PDF_MB} MB · one file per MOV</div>
       </div>
     </aside>
     <section class="lg:col-span-8 space-y-5 min-w-0">
@@ -480,13 +502,115 @@ function renderAwardee() {
   </div>`;
 }
 
-async function saveItem(key, patch) {
-  const updates = { updatedAt: serverTimestamp() };
-  for (const [k, v] of Object.entries(patch)) updates[`items.${key}.${k}`] = v;
+// ----- PDF files -----
+// PDFs are stored in Firestore (free plan): split into chunks of raw bytes.
+//   pdfs/{uid}/movs/{movKey}            -> { name, size, chunks, uploadedAt }
+//   pdfs/{uid}/movs/{movKey}/chunks/{n} -> { data: Bytes }
+const CHUNK_BYTES = 900000;
+const movDoc = (uid, key) => doc(db, "pdfs", uid, "movs", key);
+const chunkDoc = (uid, key, n) => doc(db, "pdfs", uid, "movs", key, "chunks", String(n));
+
+function pickPdf(key) {
+  state.uploadKey = key;
+  const input = $("#pdf-input");
+  input.value = "";
+  input.click();
+}
+
+function setUploadProgress(key, pct) {
+  state.uploads[key] = pct;
+  const barEl = document.getElementById("upbar-" + key);
+  const pctEl = document.getElementById("uppct-" + key);
+  if (barEl) barEl.style.width = pct + "%";
+  if (pctEl) pctEl.textContent = pct + "%";
+}
+
+async function uploadPdf(key, file) {
+  if (!file) return;
+  if (file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) return toast("Only PDF files are allowed.", "warn");
+  if (file.size > MAX_PDF_MB * 1048576) {
+    return toast(`That PDF is ${fmtSize(file.size)}. The limit is ${MAX_PDF_MB} MB. Compress it first (e.g. ilovepdf.com).`, "warn");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (String.fromCharCode(...bytes.slice(0, 5)) !== "%PDF-") return toast("That file isn't a real PDF. Save or export it as PDF first.", "warn");
+
+  const uid = state.user.uid;
+  const old = (state.app.items || {})[key];
+  const oldChunks = hasPdf(old) ? old.file.chunks || 0 : 0;
+  const chunks = Math.ceil(bytes.length / CHUNK_BYTES);
+  setUploadProgress(key, 0);
+  render();
   try {
-    await updateDoc(doc(db, "applications", state.user.uid), updates);
+    for (let n = 0; n < chunks; n++) {
+      await setDoc(chunkDoc(uid, key, n), { data: Bytes.fromUint8Array(bytes.subarray(n * CHUNK_BYTES, (n + 1) * CHUNK_BYTES)) });
+      setUploadProgress(key, Math.round(((n + 1) / chunks) * 95));
+    }
+    const name = file.name.slice(0, 200);
+    const batch = writeBatch(db);
+    for (let n = chunks; n < oldChunks; n++) batch.delete(chunkDoc(uid, key, n));
+    batch.set(movDoc(uid, key), { name, size: bytes.length, chunks, uploadedAt: serverTimestamp() });
+    batch.update(doc(db, "applications", uid), {
+      [`items.${key}`]: { submitted: true, file: { name, size: bytes.length, chunks, path: `pdfs/${uid}/movs/${key}` } },
+      updatedAt: serverTimestamp()
+    });
+    await batch.commit();
+    toast("PDF uploaded");
   } catch (e) {
     toast(errorText(e), "error");
+  }
+  delete state.uploads[key];
+  render();
+}
+
+function confirmRemove(key) {
+  const it = (state.app.items || {})[key];
+  if (!hasPdf(it)) return;
+  openModal(`<div class="p-6 space-y-2">
+    <h3 class="text-lg font-bold text-slate-900">Remove this PDF?</h3>
+    <p class="text-sm text-slate-600"><span class="font-semibold text-red-700">${esc(it.file.name)}</span> will be deleted.</p>
+  </div>
+  <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+    <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+    <button data-act="do-remove" data-key="${key}" class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow">Remove</button>
+  </div>`);
+}
+
+async function removePdf(key) {
+  const it = (state.app.items || {})[key];
+  closeModal();
+  if (!hasPdf(it)) return;
+  const uid = state.user.uid;
+  try {
+    const batch = writeBatch(db);
+    for (let n = 0; n < (it.file.chunks || 0); n++) batch.delete(chunkDoc(uid, key, n));
+    batch.delete(movDoc(uid, key));
+    batch.update(doc(db, "applications", uid), { [`items.${key}`]: { submitted: false }, updatedAt: serverTimestamp() });
+    await batch.commit();
+    toast("PDF removed");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+async function viewPdf(uid, key) {
+  // Open the tab first so pop-up blockers allow it, then fill it once the chunks have loaded.
+  const w = window.open("", "_blank");
+  if (w) w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Opening PDF…</p>');
+  try {
+    const meta = await getDoc(movDoc(uid, key));
+    if (!meta.exists()) throw { code: "not-found" };
+    const { chunks } = meta.data();
+    const parts = [];
+    for (let n = 0; n < chunks; n++) {
+      const c = await getDoc(chunkDoc(uid, key, n));
+      if (!c.exists()) throw { code: "not-found" };
+      parts.push(c.data().data.toUint8Array());
+    }
+    const url = URL.createObjectURL(new Blob(parts, { type: "application/pdf" }));
+    if (w) w.location.href = url; else window.location.href = url;
+  } catch (e) {
+    if (w) w.close();
+    toast(e && e.code === "not-found" ? "That file is no longer there. Upload it again." : errorText(e), "error");
   }
 }
 
@@ -499,7 +623,7 @@ function openSubmit() {
     </div>
     <div class="p-6 space-y-4">
       <div class="text-xs font-bold px-3 py-2 rounded-lg border ${full ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-amber-50 text-amber-800 border-amber-300"}">
-        <span class="tabular">${p.sub} of ${p.total}</span> MOVs ticked${full ? "" : ". You can still submit and add the rest later."}
+        <span class="tabular">${p.sub} of ${p.total}</span> MOVs uploaded${full ? "" : ". You can still submit and add the rest later."}
       </div>
       ${field("submit-endorser", 'Endorsed by <span class="text-red-500">*</span>', "text", `value="${esc(myName())}" maxlength="120"`)}
       <label class="flex items-start gap-3 bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 cursor-pointer">
@@ -565,7 +689,7 @@ function renderAdmin() {
         <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>
           <th class="text-left font-bold px-4 py-2.5">Applicant</th>
           <th class="text-left font-bold px-4 py-2.5">Award</th>
-          <th class="text-left font-bold px-4 py-2.5">Ticked</th>
+          <th class="text-left font-bold px-4 py-2.5">Uploaded</th>
           <th class="text-left font-bold px-4 py-2.5">Verified</th>
           <th class="text-left font-bold px-4 py-2.5">Status</th>
         </tr></thead>
@@ -602,15 +726,12 @@ function renderReview() {
       ${CATEGORIES[cat].items.map((text, i) => {
         const key = `${cat}_${i}`;
         const it = items[key] || {};
-        const url = safeUrl(it.link);
         return `<div class="p-3 sm:px-4 flex flex-wrap sm:flex-nowrap gap-x-3 gap-y-2 items-center ${ver[key] ? "bg-emerald-50/60" : ""}">
           <div class="flex-1 min-w-[200px] text-sm font-medium text-slate-800"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
-          ${it.submitted
-            ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Ticked</span>`
-            : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Not ticked</span>`}
-          ${url
-            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
-            : `<span class="text-xs text-slate-400">No link</span>`}
+          ${hasPdf(it)
+            ? `<button data-act="view" data-uid="${esc(app.uid)}" data-key="${key}" title="${esc(it.file.name)}" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition">
+                <i data-lucide="file-text" class="w-3.5 h-3.5"></i>View PDF <span class="font-normal text-red-500 tabular">${fmtSize(it.file.size || 0)}</span></button>`
+            : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">No PDF</span>`}
           <label class="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${ver[key] ? "text-emerald-700" : "text-slate-600"}">
             <input type="checkbox" data-act="verify" data-key="${key}" ${ver[key] ? "checked" : ""} class="w-5 h-5 rounded border-2 border-slate-300 text-emerald-600 focus:ring-emerald-500">Verified</label>
         </div>`;
@@ -629,13 +750,13 @@ function renderReview() {
       </div>
       <div class="flex flex-col items-end gap-2">
         ${pill(st)}
-        <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} ticked</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
+        <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} uploaded</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
       </div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <section class="lg:col-span-8 space-y-5 min-w-0">
         <div class="flex justify-end">
-          <button data-act="verify-ticked" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition">Verify all ticked</button>
+          <button data-act="verify-ticked" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition">Verify all uploaded</button>
         </div>
         ${part(GENERAL, "General MOVs")}
         ${part(app.award, esc(a.name) + " MOVs")}
@@ -704,10 +825,10 @@ function renderGuide() {
       <h3 class="text-base font-bold text-brand-900 border-l-4 border-brand-800 pl-3">How it works</h3>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         ${step(1, "Choose your award", "General MOVs are added automatically.", "bg-blue-50 border-blue-200 text-blue-900")}
-        ${step(2, "Tick MOVs + add links", "Paste a Google Drive link for each file.", "bg-amber-50 border-amber-200 text-amber-900")}
+        ${step(2, "Upload a PDF per MOV", "One PDF each, up to 5 MB.", "bg-amber-50 border-amber-200 text-amber-900")}
         ${step(3, "Committee verifies", "Watch for the green Verified badge.", "bg-emerald-50 border-emerald-200 text-emerald-900")}
       </div>
-      <p class="text-xs text-slate-500">Set Drive files to <strong class="text-slate-700">Anyone with the link can view</strong> so the committee can open them.</p>
+      <p class="text-xs text-slate-500">Several pages for one MOV? <strong class="text-slate-700">Combine them into one PDF</strong> before uploading.</p>
     </section>
     <section class="space-y-3">
       <h3 class="text-base font-bold text-brand-900 border-l-4 border-depedGold-500 pl-3">Why</h3>
@@ -753,6 +874,10 @@ document.addEventListener("click", async (e) => {
     case "confirm-pick": savePick(el.dataset.key); break;
     case "change-award": state.picking = true; render(); break;
     case "cancel-change": state.picking = false; render(); break;
+    case "upload": pickPdf(el.dataset.key); break;
+    case "remove": confirmRemove(el.dataset.key); break;
+    case "do-remove": removePdf(el.dataset.key); break;
+    case "view": viewPdf(el.dataset.uid, el.dataset.key); break;
     case "open-submit": openSubmit(); break;
     case "do-submit": doSubmit(); break;
     case "open": state.selected = el.dataset.uid; window.scrollTo({ top: 0 }); render(); break;
@@ -760,8 +885,8 @@ document.addEventListener("click", async (e) => {
     case "verify-ticked": {
       const app = state.apps[state.selected];
       const map = {};
-      checklist(app.award).forEach((r) => { if (app.items && app.items[r.key] && app.items[r.key].submitted) map[r.key] = true; });
-      if (!Object.keys(map).length) return toast("Nothing ticked yet.", "warn");
+      checklist(app.award).forEach((r) => { if (hasPdf(app.items && app.items[r.key])) map[r.key] = true; });
+      if (!Object.keys(map).length) return toast("No PDFs uploaded yet.", "warn");
       await setVerified(map);
       toast(`${Object.keys(map).length} MOVs verified`);
       break;
@@ -777,15 +902,12 @@ document.addEventListener("keydown", (e) => {
 
 document.addEventListener("change", (e) => {
   const el = e.target;
+  if (el.id === "pdf-input") {
+    if (state.uploadKey && el.files && el.files[0]) uploadPdf(state.uploadKey, el.files[0]);
+    state.uploadKey = null;
+    return;
+  }
   switch (el.dataset.act) {
-    case "tick": saveItem(el.dataset.key, { submitted: el.checked }); break;
-    case "link": {
-      const v = el.value.trim();
-      if (v && !safeUrl(v)) { el.classList.add("border-red-400"); return toast("Links must start with https://", "warn"); }
-      saveItem(el.dataset.key, v ? { link: v, submitted: true } : { link: "" });
-      if (v) toast("Link saved");
-      break;
-    }
     case "verify": setVerified({ [el.dataset.key]: el.checked }); break;
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
