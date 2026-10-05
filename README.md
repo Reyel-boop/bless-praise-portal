@@ -1,6 +1,6 @@
 # BLESS PRAISE Portal — San Vicente NHS
 
-Teachers sign in, choose **one award**, and upload **one PDF per MOV** (max 5 MB).
+Teachers sign in, choose **one award**, tick the required MOVs and paste a Google Drive link for each.
 Admins (the PRAISE Committee) see every applicant, mark MOVs **Verified**, and record a decision.
 
 | File | What it is |
@@ -9,7 +9,7 @@ Admins (the PRAISE Committee) see every applicant, mark MOVs **Verified**, and r
 | `app.js` | Login, award picker, checklist, admin review |
 | `data.js` | MOVs list per award. Edit here to change requirements |
 | `firebase-config.js` | Your Firebase keys (step 4) |
-| `firestore.rules` | Who can read/write the database and PDFs (step 3) |
+| `firestore.rules` | Who can read/write what (step 3) |
 | `logo.png` | BLESS seal |
 
 ---
@@ -54,14 +54,13 @@ Firebase → **Authentication → Settings → Authorized domains → Add domain
 **Teachers (awardees)**
 1. **Create account** → open the verification email (check Spam) → **Continue**.
 2. **Choose your award.** General MOVs are added automatically.
-3. Click **Upload PDF** on each MOV (max 5 MB). Several pages? Combine them into one PDF first.
-   Too big? Shrink it free at ilovepdf.com → Compress PDF.
-4. **Submit for review.** The award is locked after this. PDFs can still be uploaded.
+3. Tick each MOV and paste its Drive link. Set Drive files to *Anyone with the link can view*.
+4. **Submit for review.** The award is locked after this. Links can still be added.
 5. Watch for green **Verified** badges, the status, and committee remarks.
 
 **Admins**
 - **Applicants** tab: totals, search, filter by award or status.
-- Click an applicant → **View PDF** on each MOV → tick **Verified** (or **Verify all uploaded**).
+- Click an applicant → open each link → tick **Verified** (or **Verify all ticked**).
 - Pick a **decision** (Complete / Incomplete / For compliance / Qualified / Disqualified), add remarks, **Save decision**.
   *Complete, Qualified* and *Disqualified* lock the teacher's checklist.
 
@@ -69,13 +68,5 @@ Firebase → **Authentication → Settings → Authorized domains → Add domain
 Edit the lists in `data.js` and upload it again. Items are matched by position, so add new items **at the end** of a list
 to keep existing ticks lined up. If you add a new award, also add its key to `awardKeys()` in `firestore.rules` and publish the rules.
 
-## Cost: free
-The project stays on Firebase's free **Spark** plan; no card needed. PDFs are stored inside the database
-(split into ~900 KB pieces), so they share its free allowance:
-
-- **1 GB total** stored (roughly 1,000+ typical PDFs)
-- 50,000 reads and 20,000 writes per day (viewing one 5 MB PDF uses about 7 reads)
-
-If the school ever outgrows this, move PDFs to Firebase Storage (requires the Blaze plan).
-
-Deploy rule changes with: `npx firebase-tools deploy --only firestore:rules`
+## Free plan limits
+Firebase's free Spark plan covers 50,000 reads and 20,000 writes per day. That's far more than one school needs.

@@ -5,9 +5,8 @@ rules_version = '2';
 // Collections
 //   admins/{email}        Admin list. Add documents by hand in the console (ID = lowercase email).
 //   users/{uid}           Awardee profile (name, position, department).
-//   applications/{uid}    The awardee's chosen award and which MOVs have a PDF.
+//   applications/{uid}    The awardee's chosen award, ticked MOVs and Drive links.
 //   reviews/{uid}         Committee decision: verified MOVs, status, remarks. Admins only.
-//   pdfs/{uid}/movs/{key} Uploaded MOV PDF (metadata) with chunks/{n} holding the bytes (max 5 MB per PDF).
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -19,12 +18,6 @@ service cloud.firestore {
     }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
     function isSelf(uid) { return verified() && request.auth.uid == uid; }
-
-    // Complete / Qualified / Disqualified applications can no longer change their PDFs.
-    function isLocked(uid) {
-      let r = /databases/$(database)/documents/reviews/$(uid);
-      return exists(r) && get(r).data.get('status', '') in ['complete', 'qualified', 'disqualified'];
-    }
 
     function awardKeys() {
       return ['cat-teach-1', 'cat-teach-2', 'cat-teach-3', 'cat-teach-4', 'cat-teach-5', 'cat-teach-6', 'cat-teach-7',
@@ -65,26 +58,6 @@ service cloud.firestore {
         && (resource.data.get('submittedAt', null) == null
             || request.resource.data.award == resource.data.award);
       allow delete: if false;
-    }
-
-    match /pdfs/{uid}/movs/{key} {
-      allow read: if isSelf(uid) || isAdmin();
-      allow create, update: if isSelf(uid) && !isLocked(uid)
-        && key.matches('cat-[a-z0-9-]+_[0-9]+')
-        && request.resource.data.keys().hasOnly(['name', 'size', 'chunks', 'uploadedAt'])
-        && request.resource.data['size'] is int && request.resource.data['size'] <= 5 * 1024 * 1024
-        && request.resource.data.chunks is int && request.resource.data.chunks <= 6;
-      allow delete: if isSelf(uid) && !isLocked(uid);
-
-      match /chunks/{n} {
-        allow read: if isSelf(uid) || isAdmin();
-        allow create, update: if isSelf(uid) && !isLocked(uid)
-          && n.matches('[0-5]')
-          && request.resource.data.keys().hasOnly(['data'])
-          && request.resource.data.data is bytes
-          && request.resource.data.data.size() <= 900000;
-        allow delete: if isSelf(uid) && !isLocked(uid);
-      }
     }
 
     match /reviews/{uid} {
