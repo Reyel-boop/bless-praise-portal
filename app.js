@@ -336,7 +336,7 @@ function renderPicker() {
   main.innerHTML = `
     <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h2 class="text-2xl font-bold text-slate-900">${changing ? "Change your award" : "Choose your award"}</h2>
+        <h2 class="text-2xl font-bold text-slate-900">Choose your award</h2>
         <p class="text-sm text-slate-500 mt-0.5"><span class="font-semibold text-blue-700">General MOVs</span> (${CATEGORIES[GENERAL].items.length}) are included automatically.</p>
       </div>
       ${changing ? `<button data-act="cancel-change" class="text-sm font-semibold text-slate-600 hover:text-slate-900">Cancel</button>` : ""}
@@ -735,11 +735,13 @@ document.addEventListener("click", async (e) => {
   const act = el.dataset.act;
   switch (act) {
     case "home":
-      // Logo: back to the main screen (award checklist or applicants list) without reloading.
+      // Logo = home: teachers go to "Choose your award", admins to the applicants list.
       e.preventDefault();
       closeModal();
-      Object.assign(state, { tab: "main", selected: null, picking: false, authMode: "login" });
+      Object.assign(state, { tab: "main", selected: null, authMode: "login" });
+      state.picking = state.role === "awardee" && !!state.app && !state.app.submittedAt;
       render();
+      if (state.role === "awardee" && state.app && state.app.submittedAt) toast("Your award is locked after submitting.", "warn");
       window.scrollTo({ top: 0, behavior: "smooth" });
       break;
     case "signout": await signOut(auth); break;
