@@ -331,6 +331,23 @@ const GROUP_COLORS = {
   amber: { dot: "bg-amber-500", chip: "bg-amber-50 text-amber-800 border-amber-200", hover: "hover:border-amber-400" }
 };
 
+// Each award has its own color and icon on the award picker.
+const AWARD_STYLE = {
+  "cat-teach-1": { icon: "graduation-cap", card: "bg-gradient-to-br from-blue-100 via-blue-50 to-white border-blue-300 hover:border-blue-500", badge: "bg-blue-600", local: "text-blue-700", chip: "bg-blue-600 text-white" },
+  "cat-teach-2": { icon: "lightbulb", card: "bg-gradient-to-br from-violet-100 via-violet-50 to-white border-violet-300 hover:border-violet-500", badge: "bg-violet-600", local: "text-violet-700", chip: "bg-violet-600 text-white" },
+  "cat-teach-3": { icon: "flask-conical", card: "bg-gradient-to-br from-cyan-100 via-cyan-50 to-white border-cyan-300 hover:border-cyan-500", badge: "bg-cyan-600", local: "text-cyan-700", chip: "bg-cyan-600 text-white" },
+  "cat-teach-4": { icon: "compass", card: "bg-gradient-to-br from-indigo-100 via-indigo-50 to-white border-indigo-300 hover:border-indigo-500", badge: "bg-indigo-600", local: "text-indigo-700", chip: "bg-indigo-600 text-white" },
+  "cat-teach-5": { icon: "users", card: "bg-gradient-to-br from-sky-100 via-sky-50 to-white border-sky-300 hover:border-sky-500", badge: "bg-sky-600", local: "text-sky-700", chip: "bg-sky-600 text-white" },
+  "cat-teach-6": { icon: "hand-heart", card: "bg-gradient-to-br from-teal-100 via-teal-50 to-white border-teal-300 hover:border-teal-500", badge: "bg-teal-600", local: "text-teal-700", chip: "bg-teal-600 text-white" },
+  "cat-teach-7": { icon: "award", card: "bg-gradient-to-br from-amber-100 via-amber-50 to-white border-amber-300 hover:border-amber-500", badge: "bg-amber-600", local: "text-amber-700", chip: "bg-amber-600 text-white" },
+  "cat-nonteach-1": { icon: "headset", card: "bg-gradient-to-br from-emerald-100 via-emerald-50 to-white border-emerald-300 hover:border-emerald-500", badge: "bg-emerald-600", local: "text-emerald-700", chip: "bg-emerald-600 text-white" },
+  "cat-nonteach-2": { icon: "gauge", card: "bg-gradient-to-br from-lime-100 via-lime-50 to-white border-lime-300 hover:border-lime-500", badge: "bg-lime-600", local: "text-lime-700", chip: "bg-lime-600 text-white" },
+  "cat-nonteach-3": { icon: "heart", card: "bg-gradient-to-br from-rose-100 via-rose-50 to-white border-rose-300 hover:border-rose-500", badge: "bg-rose-600", local: "text-rose-700", chip: "bg-rose-600 text-white" },
+  "cat-nonteach-4": { icon: "handshake", card: "bg-gradient-to-br from-orange-100 via-orange-50 to-white border-orange-300 hover:border-orange-500", badge: "bg-orange-600", local: "text-orange-700", chip: "bg-orange-600 text-white" },
+  "cat-special-1": { icon: "book-heart", card: "bg-gradient-to-br from-pink-100 via-pink-50 to-white border-pink-300 hover:border-pink-500", badge: "bg-pink-600", local: "text-pink-700", chip: "bg-pink-600 text-white" },
+  "cat-special-2": { icon: "zap", card: "bg-gradient-to-br from-red-100 via-red-50 to-white border-red-300 hover:border-red-500", badge: "bg-red-600", local: "text-red-700", chip: "bg-red-600 text-white" }
+};
+
 function renderPicker() {
   const changing = !!state.app;
   main.innerHTML = `
@@ -350,11 +367,17 @@ function renderPicker() {
             ${g.keys.map((k) => {
               const a = awardName(k);
               const current = state.app && state.app.award === k;
-              return `<button data-act="pick" data-key="${k}" class="text-left bg-white rounded-xl border ${current ? "border-2 border-depedGold-500" : "border-slate-200"} ${c.hover} p-4 shadow-sm hover:shadow transition flex flex-col gap-1.5">
-                <span class="text-sm font-bold text-slate-900">${esc(a.name)}</span>
-                ${a.local ? `<span class="font-serif italic text-sm text-depedGold-600">${esc(a.local)}</span>` : ""}
-                <span class="mt-1 self-start text-[11px] font-bold px-2 py-0.5 rounded-full border ${c.chip}">${CATEGORIES[k].items.length} MOVs</span>
-                ${current ? `<span class="text-[11px] font-bold text-depedGold-600">Current choice</span>` : ""}
+              const st = AWARD_STYLE[k];
+              return `<button data-act="pick" data-key="${k}" class="relative text-left rounded-2xl border-2 ${st.card} ${current ? "ring-4 ring-depedGold-400 ring-offset-2" : ""} p-4 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition flex gap-3 items-start">
+                <span class="w-11 h-11 rounded-xl ${st.badge} text-white flex items-center justify-center flex-shrink-0 shadow"><i data-lucide="${st.icon}" class="w-5 h-5"></i></span>
+                <span class="flex flex-col gap-1 min-w-0">
+                  <span class="text-sm font-bold text-slate-900 leading-snug">${esc(a.name)}</span>
+                  ${a.local ? `<span class="font-serif italic text-sm ${st.local}">${esc(a.local)}</span>` : ""}
+                  <span class="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span class="text-[11px] font-bold px-2 py-0.5 rounded-full ${st.chip}">${CATEGORIES[k].items.length} MOVs</span>
+                    ${current ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-depedGold-400 text-brand-950">Current choice</span>` : ""}
+                  </span>
+                </span>
               </button>`;
             }).join("")}
           </div>
