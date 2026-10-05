@@ -19,6 +19,11 @@ service cloud.firestore {
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
     function isSelf(uid) { return verified() && request.auth.uid == uid; }
 
+    function reopened(uid) {
+      let r = /databases/$(database)/documents/reviews/$(uid);
+      return exists(r) && get(r).data.get('status', '') in ['compliance', 'incomplete'];
+    }
+
     function awardKeys() {
       return ['cat-teach-1', 'cat-teach-2', 'cat-teach-3', 'cat-teach-4', 'cat-teach-5', 'cat-teach-6', 'cat-teach-7',
               'cat-nonteach-1', 'cat-nonteach-2', 'cat-nonteach-3', 'cat-nonteach-4',
@@ -53,10 +58,12 @@ service cloud.firestore {
     match /applications/{uid} {
       allow read: if isSelf(uid) || isAdmin();
       allow create: if isSelf(uid) && validApplication(uid);
-      // The award is locked once the application is submitted.
+      // Once submitted, the award is locked and links can only change if the
+      // committee reopened it (Incomplete / For compliance).
       allow update: if isSelf(uid) && validApplication(uid)
         && (resource.data.get('submittedAt', null) == null
-            || request.resource.data.award == resource.data.award);
+            || (request.resource.data.award == resource.data.award
+                && (request.resource.data.items == resource.data.items || reopened(uid))));
       allow delete: if false;
     }
 

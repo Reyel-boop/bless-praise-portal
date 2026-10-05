@@ -117,7 +117,8 @@ const state = {
   app: null, review: null, loaded: false,
   apps: {}, reviews: {}, selected: null, drafts: {},
   filter: { q: "", award: "", status: "" },
-  tab: "main", authMode: "login", unsubs: []
+  tab: "main", authMode: "login", unsubs: [],
+  linkDrafts: {}
 };
 let auth, db;
 
@@ -136,7 +137,7 @@ async function onUser(u) {
   state.unsubs.forEach((f) => f());
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false,
-    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: []
+    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
   if (!u.emailVerified) return render();
@@ -422,47 +423,92 @@ async function savePick(key) {
 }
 
 // ----- Awardee: MOVs checklist -----
+// Links must point to Google Drive / Docs.
+const isDriveUrl = (u) => /^https:\/\/(drive|docs)\.google\.com\/\S+$/i.test(u || "");
+const savedLink = (key) => ((state.app.items || {})[key] || {}).link || "";
+const draftLink = (key) => (state.linkDrafts[key] !== undefined ? state.linkDrafts[key] : savedLink(key));
+// Teachers edit freely before submitting; afterwards only when the committee sends it back.
+function canEditLinks() {
+  if (!state.app.submittedAt) return true;
+  const st = statusOf(state.app, state.review);
+  return st === "compliance" || st === "incomplete";
+}
+function linkReadiness() {
+  const rows = checklist(state.app.award);
+  const ready = rows.filter((r) => isDriveUrl(draftLink(r.key).trim())).length;
+  const unsaved = rows.filter((r) => draftLink(r.key).trim() !== savedLink(r.key)).length;
+  return { total: rows.length, ready, unsaved, all: ready === rows.length };
+}
+
 function renderAwardee() {
   const { app, review } = state;
   const st = statusOf(app, review);
   const p = progress(app, review);
-  const locked = LOCKED.includes(st);
+  const editable = canEditLinks();
+  const reopened = !!app.submittedAt && editable;
   const a = awardName(app.award);
   const g = groupOf(app.award);
-  const items = app.items || {};
   const ver = (review && review.verified) || {};
+  const rd = linkReadiness();
+
+  const rowState = (key) => {
+    const d = draftLink(key).trim(), s = savedLink(key);
+    if (d && !isDriveUrl(d)) return `<span class="text-red-700 font-semibold">Not a Google Drive link. It must start with https://drive.google.com/ or https://docs.google.com/</span>`;
+    if (d !== s) return `<span class="text-amber-700 font-semibold">Not saved yet. Click Save.</span>`;
+    if (s) return `<span class="text-blue-700 font-semibold inline-flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i>Saved</span>`;
+    return `<span class="text-slate-400">No link yet</span>`;
+  };
 
   const part = (cat, heading) => {
     const list = CATEGORIES[cat].items;
-    const done = list.filter((_, i) => items[`${cat}_${i}`] && items[`${cat}_${i}`].submitted).length;
+    const done = list.filter((_, i) => isDriveUrl(savedLink(`${cat}_${i}`))).length;
     return `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
         <h3 class="text-sm font-bold text-slate-800">${heading}</h3>
-        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} ticked</span>
+        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} saved</span>
       </div>
       <div class="divide-y divide-slate-100">
         ${list.map((text, i) => {
           const key = `${cat}_${i}`;
-          const it = items[key] || {};
-          const link = it.link || "";
           const ok = ver[key];
-          return `<div class="p-3 sm:px-4 flex gap-3 items-start ${ok ? "bg-emerald-50/60" : ""}">
-            <input type="checkbox" id="tick-${key}" data-act="tick" data-key="${key}" ${it.submitted ? "checked" : ""} ${locked ? "disabled" : ""}
-              class="mt-0.5 w-5 h-5 rounded border-2 border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer flex-shrink-0" aria-label="Mark as submitted">
-            <div class="flex-1 min-w-0">
-              <label for="tick-${key}" class="block text-sm font-medium text-slate-800 cursor-pointer"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</label>
-              <div class="mt-1.5 flex items-center gap-2">
-                <input id="link-${key}" data-act="link" data-key="${key}" type="url" value="${esc(link)}" placeholder="Paste Google Drive link" ${locked ? "disabled" : ""}
-                  class="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-md border ${link && !safeUrl(link) ? "border-red-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50">
-                ${safeUrl(link) ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer" class="text-xs font-semibold text-blue-700 hover:underline flex-shrink-0">Open</a>` : ""}
-              </div>
+          const d = draftLink(key);
+          const s = savedLink(key);
+          const dirty = d.trim() !== s;
+          const bad = d.trim() && !isDriveUrl(d.trim());
+          return `<div class="p-3 sm:px-4 ${ok ? "bg-emerald-50/60" : ""}">
+            <div class="flex items-start justify-between gap-3">
+              <div class="text-sm font-medium text-slate-800 min-w-0"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
+              ${ok
+                ? `<span class="flex-shrink-0 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white"><i data-lucide="check-check" class="w-3 h-3"></i>Verified</span>`
+                : `<span class="flex-shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Pending</span>`}
             </div>
-            ${ok
-              ? `<span class="flex-shrink-0 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white"><i data-lucide="check-check" class="w-3 h-3"></i>Verified</span>`
-              : `<span class="flex-shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Pending</span>`}
+            <div class="mt-2 flex items-center gap-2">
+              <input id="link-${key}" data-act="link" data-key="${key}" type="url" value="${esc(d)}" placeholder="Paste Google Drive link" ${editable ? "" : "disabled"}
+                class="flex-1 min-w-0 text-xs px-2.5 py-2 rounded-md border ${bad ? "border-red-400 bg-red-50/40" : dirty ? "border-amber-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500">
+              ${editable ? `<button data-act="save-link" data-key="${key}" ${dirty && !bad ? "" : "disabled"}
+                class="flex-shrink-0 px-3.5 py-2 rounded-md text-xs font-bold transition ${dirty && !bad ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm" : "bg-slate-100 text-slate-400 cursor-not-allowed"}">Save</button>` : ""}
+              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-blue-700 hover:underline">Open</a>` : ""}
+            </div>
+            <div class="mt-1 text-[11px]">${rowState(key)}</div>
           </div>`;
         }).join("")}
       </div>
+    </div>`;
+  };
+
+  const submitBox = () => {
+    if (app.submittedAt && !reopened) {
+      return `<div class="text-xs text-slate-500 border-t border-slate-100 pt-3">Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}
+        <br><span class="inline-flex items-center gap-1 mt-1 font-semibold text-slate-600"><i data-lucide="lock" class="w-3 h-3"></i>Links are locked while the committee reviews.</span></div>`;
+    }
+    return `<div class="flex flex-col gap-2 pt-1">
+      ${reopened ? `<div class="text-xs font-semibold text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">The committee reopened your application. Fix the links, then resubmit.</div>` : ""}
+      <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold shadow transition ${rd.all ? "bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
+        <i data-lucide="${rd.all ? "send" : "lock"}" class="w-4 h-4"></i>${reopened ? "Resubmit" : "Submit for review"}</button>
+      <p class="text-[11px] text-center ${rd.all ? "text-emerald-700 font-semibold" : "text-slate-500"}">${rd.all
+        ? `All ${rd.total} MOVs have a link.${rd.unsaved ? ` ${rd.unsaved} unsaved will be saved when you submit.` : ""}`
+        : `Add a Google Drive link to <strong class="text-slate-700">all ${rd.total} MOVs</strong> to submit. <span class="tabular">${rd.ready}/${rd.total}</span> done.`}</p>
+      ${app.submittedAt ? "" : `<button data-act="change-award" class="text-xs font-semibold text-slate-500 hover:text-slate-800">Change award</button>`}
     </div>`;
   };
 
@@ -475,22 +521,17 @@ function renderAwardee() {
           ${a.local ? `<div class="font-serif italic text-depedGold-600">${esc(a.local)}</div>` : ""}
           <div class="mt-2">${pill(st)}</div>
         </div>
-        ${bar("Ticked", p.sub, p.total, BLUE)}
+        ${bar("Saved links", p.sub, p.total, BLUE)}
         ${bar("Verified", p.ver, p.total, GREEN)}
-        ${!app.submittedAt
-          ? `<div class="flex flex-col gap-2 pt-1">
-              <button data-act="open-submit" class="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950 text-sm font-bold shadow transition">
-                <i data-lucide="send" class="w-4 h-4"></i>Submit for review</button>
-              <button data-act="change-award" class="text-xs font-semibold text-slate-500 hover:text-slate-800">Change award</button>
-            </div>`
-          : `<div class="text-xs text-slate-500 border-t border-slate-100 pt-3">Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}${locked ? "" : `<br><span class="text-sky-700">You can still add links if the committee asks.</span>`}</div>`}
+        ${submitBox()}
       </div>
       ${review && review.remarks ? `<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4">
         <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5"><i data-lucide="message-square" class="w-3.5 h-3.5"></i>Committee remarks</div>
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
       </div>` : ""}
       <div class="rounded-2xl bg-gradient-to-br from-brand-900 to-slate-900 text-white p-4 text-xs">
-        <span class="text-blue-300 font-bold">Ticked</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
+        <span class="text-blue-300 font-bold">Saved</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
+        <div class="mt-1.5 text-slate-300">Google Drive links only. Set sharing to <strong class="text-white">Anyone with the link</strong>.</div>
       </div>
     </aside>
     <section class="lg:col-span-8 space-y-5 min-w-0">
@@ -500,36 +541,45 @@ function renderAwardee() {
   </div>`;
 }
 
-async function saveItem(key, patch) {
-  const updates = { updatedAt: serverTimestamp() };
-  for (const [k, v] of Object.entries(patch)) updates[`items.${key}.${k}`] = v;
+async function saveLink(key) {
+  if (!canEditLinks()) return toast("Links are locked while the committee reviews.", "warn");
+  const v = draftLink(key).trim();
+  if (v && !isDriveUrl(v)) return toast("Only Google Drive links are allowed (drive.google.com or docs.google.com).", "warn");
   try {
-    await updateDoc(doc(db, "applications", state.user.uid), updates);
+    await updateDoc(doc(db, "applications", state.user.uid), {
+      [`items.${key}`]: v ? { submitted: true, link: v } : { submitted: false, link: "" },
+      updatedAt: serverTimestamp()
+    });
+    delete state.linkDrafts[key];
+    toast(v ? "Link saved" : "Link removed");
+    render();
   } catch (e) {
     toast(errorText(e), "error");
   }
 }
 
 function openSubmit() {
-  const p = progress(state.app, state.review);
-  const full = p.sub === p.total;
+  const rd = linkReadiness();
+  if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first (${rd.ready}/${rd.total} done).`, "warn");
+  const again = !!state.app.submittedAt;
   openModal(`<div class="bg-gradient-to-r from-brand-950 to-brand-900 text-white px-6 py-4 border-b-2 border-depedGold-500">
-      <h3 class="text-base font-bold">Submit for review</h3>
+      <h3 class="text-base font-bold">${again ? "Resubmit for review" : "Submit for review"}</h3>
       <p class="text-xs text-slate-300">${esc(awardName(state.app.award).name)}</p>
     </div>
     <div class="p-6 space-y-4">
-      <div class="text-xs font-bold px-3 py-2 rounded-lg border ${full ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-amber-50 text-amber-800 border-amber-300"}">
-        <span class="tabular">${p.sub} of ${p.total}</span> MOVs ticked${full ? "" : ". You can still submit and add the rest later."}
+      <div class="text-xs font-bold px-3 py-2 rounded-lg border bg-blue-50 text-blue-800 border-blue-200">
+        All <span class="tabular">${rd.total}</span> MOVs have a link.${rd.unsaved ? ` <span class="text-amber-700">${rd.unsaved} unsaved link${rd.unsaved > 1 ? "s" : ""} will be saved now.</span>` : ""}
       </div>
-      ${field("submit-endorser", 'Endorsed by <span class="text-red-500">*</span>', "text", `value="${esc(myName())}" maxlength="120"`)}
+      ${field("submit-endorser", 'Endorsed by <span class="text-red-500">*</span>', "text", `value="${esc(state.app.endorser || myName())}" maxlength="120"`)}
       <label class="flex items-start gap-3 bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 cursor-pointer">
         <input id="submit-cert" type="checkbox" class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-600">
         <span class="text-xs text-amber-950">I certify all MOVs are <strong class="underline decoration-amber-400 decoration-2 underline-offset-2">authentic</strong> and <strong class="underline decoration-amber-400 decoration-2 underline-offset-2">original</strong>, per CSC &amp; DepEd guidelines.</span>
       </label>
+      <p class="text-[11px] text-slate-500"><i data-lucide="lock" class="w-3 h-3 inline -mt-0.5"></i> After submitting, links are locked until the committee reviews them.</p>
     </div>
     <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
       <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-      <button data-act="do-submit" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">Confirm &amp; submit</button>
+      <button data-act="do-submit" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">Save all &amp; submit</button>
     </div>`);
 }
 
@@ -537,10 +587,19 @@ async function doSubmit() {
   const endorser = $("#submit-endorser").value.trim();
   if (!endorser) return toast("Enter who endorses this application.", "warn");
   if (!$("#submit-cert").checked) return toast("Tick the certification box to submit.", "warn");
+  const rd = linkReadiness();
+  if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first.`, "warn");
+  // Save every link along with the submission, in one write.
+  const updates = { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() };
+  for (const r of checklist(state.app.award)) {
+    const v = draftLink(r.key).trim();
+    if (v !== savedLink(r.key)) updates[`items.${r.key}`] = { submitted: true, link: v };
+  }
   try {
-    await updateDoc(doc(db, "applications", state.user.uid), { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() });
+    await updateDoc(doc(db, "applications", state.user.uid), updates);
+    state.linkDrafts = {};
     closeModal();
-    toast("Submitted to the PRAISE Committee.");
+    toast("All links saved and submitted to the PRAISE Committee.");
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -585,7 +644,7 @@ function renderAdmin() {
         <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>
           <th class="text-left font-bold px-4 py-2.5">Applicant</th>
           <th class="text-left font-bold px-4 py-2.5">Award</th>
-          <th class="text-left font-bold px-4 py-2.5">Ticked</th>
+          <th class="text-left font-bold px-4 py-2.5">Links</th>
           <th class="text-left font-bold px-4 py-2.5">Verified</th>
           <th class="text-left font-bold px-4 py-2.5">Status</th>
         </tr></thead>
@@ -626,8 +685,8 @@ function renderReview() {
         return `<div class="p-3 sm:px-4 flex flex-wrap sm:flex-nowrap gap-x-3 gap-y-2 items-center ${ver[key] ? "bg-emerald-50/60" : ""}">
           <div class="flex-1 min-w-[200px] text-sm font-medium text-slate-800"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
           ${it.submitted
-            ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Ticked</span>`
-            : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Not ticked</span>`}
+            ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Saved</span>`
+            : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Missing</span>`}
           ${url
             ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
             : `<span class="text-xs text-slate-400">No link</span>`}
@@ -649,13 +708,13 @@ function renderReview() {
       </div>
       <div class="flex flex-col items-end gap-2">
         ${pill(st)}
-        <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} ticked</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
+        <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} links</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
       </div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <section class="lg:col-span-8 space-y-5 min-w-0">
         <div class="flex justify-end">
-          <button data-act="verify-ticked" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition">Verify all ticked</button>
+          <button data-act="verify-ticked" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition">Verify all with links</button>
         </div>
         ${part(GENERAL, "General MOVs")}
         ${part(app.award, esc(a.name) + " MOVs")}
@@ -724,7 +783,7 @@ function renderGuide() {
       <h3 class="text-base font-bold text-brand-900 border-l-4 border-brand-800 pl-3">How it works</h3>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         ${step(1, "Choose your award", "General MOVs are added automatically.", "bg-blue-50 border-blue-200 text-blue-900")}
-        ${step(2, "Tick MOVs + add links", "Paste a Google Drive link for each file.", "bg-amber-50 border-amber-200 text-amber-900")}
+        ${step(2, "Save a Drive link per MOV", "Paste the link, click Save. Submit when all are done.", "bg-amber-50 border-amber-200 text-amber-900")}
         ${step(3, "Committee verifies", "Watch for the green Verified badge.", "bg-emerald-50 border-emerald-200 text-emerald-900")}
       </div>
       <p class="text-xs text-slate-500">Set Drive files to <strong class="text-slate-700">Anyone with the link can view</strong> so the committee can open them.</p>
@@ -783,6 +842,7 @@ document.addEventListener("click", async (e) => {
     case "confirm-pick": savePick(el.dataset.key); break;
     case "change-award": state.tab = "home"; render(); window.scrollTo({ top: 0 }); break;
     case "go-award": state.tab = "main"; render(); window.scrollTo({ top: 0 }); break;
+    case "save-link": saveLink(el.dataset.key); break;
     case "open-submit": openSubmit(); break;
     case "do-submit": doSubmit(); break;
     case "open": state.selected = el.dataset.uid; window.scrollTo({ top: 0 }); render(); break;
@@ -791,7 +851,7 @@ document.addEventListener("click", async (e) => {
       const app = state.apps[state.selected];
       const map = {};
       checklist(app.award).forEach((r) => { if (app.items && app.items[r.key] && app.items[r.key].submitted) map[r.key] = true; });
-      if (!Object.keys(map).length) return toast("Nothing ticked yet.", "warn");
+      if (!Object.keys(map).length) return toast("No links saved yet.", "warn");
       await setVerified(map);
       toast(`${Object.keys(map).length} MOVs verified`);
       break;
@@ -803,19 +863,12 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeModal();
   if (e.key === "Enter" && e.target.matches("tr[data-act=open]")) e.target.click();
+  if (e.key === "Enter" && e.target.dataset && e.target.dataset.act === "link") { e.preventDefault(); saveLink(e.target.dataset.key); }
 });
 
 document.addEventListener("change", (e) => {
   const el = e.target;
   switch (el.dataset.act) {
-    case "tick": saveItem(el.dataset.key, { submitted: el.checked }); break;
-    case "link": {
-      const v = el.value.trim();
-      if (v && !safeUrl(v)) { el.classList.add("border-red-400"); return toast("Links must start with https://", "warn"); }
-      saveItem(el.dataset.key, v ? { link: v, submitted: true } : { link: "" });
-      if (v) toast("Link saved");
-      break;
-    }
     case "verify": setVerified({ [el.dataset.key]: el.checked }); break;
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
@@ -825,6 +878,7 @@ document.addEventListener("change", (e) => {
 document.addEventListener("input", (e) => {
   const el = e.target;
   if (el.dataset.act === "remarks") (state.drafts[state.selected] ||= {}).remarks = el.value;
+  if (el.dataset.act === "link") { state.linkDrafts[el.dataset.key] = el.value; render(); }
   if (el.dataset.act === "filter" && el.tagName === "INPUT") { state.filter.q = el.value; render(); }
 });
 
