@@ -14,6 +14,18 @@ const $ = (s) => document.querySelector(s);
 const main = $("#main");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const safeUrl = (u) => (/^https:\/\/\S+$/i.test(u || "") ? u : "");
+// A real Google Drive / Docs link with a file or folder ID, e.g.
+//   https://drive.google.com/file/d/<id>/view   https://drive.google.com/drive/folders/<id>
+//   https://drive.google.com/open?id=<id>       https://docs.google.com/document/d/<id>/edit
+const DRIVE_ID = "[A-Za-z0-9_-]{20,}";
+const DRIVE_PATTERNS = [
+  new RegExp(`^https://drive\\.google\\.com/file/d/${DRIVE_ID}(?:[/?#]\\S*)?$`),
+  new RegExp(`^https://drive\\.google\\.com/drive/(?:u/\\d+/)?folders/${DRIVE_ID}(?:[/?#]\\S*)?$`),
+  new RegExp(`^https://drive\\.google\\.com/(?:open|uc)\\?(?:\\S*&)?id=${DRIVE_ID}(?:&\\S*)?$`),
+  new RegExp(`^https://docs\\.google\\.com/(?:document|spreadsheets|presentation|forms|drawings)/d/(?:e/)?${DRIVE_ID}(?:[/?#]\\S*)?$`)
+];
+const isDriveUrl = (u) => DRIVE_PATTERNS.some((re) => re.test(String(u || "").trim()));
+const hasLink = (it) => !!(it && isDriveUrl(it.link));
 const icons = () => window.lucide && window.lucide.createIcons();
 const fmtDate = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—");
 
@@ -76,7 +88,7 @@ function progress(app, review) {
   const ver = (review && review.verified) || {};
   return {
     total: rows.length,
-    sub: rows.filter((r) => items[r.key] && items[r.key].submitted).length,
+    sub: rows.filter((r) => hasLink(items[r.key])).length,
     ver: rows.filter((r) => ver[r.key]).length
   };
 }
@@ -424,7 +436,6 @@ async function savePick(key) {
 
 // ----- Awardee: MOVs checklist -----
 // Links must point to Google Drive / Docs.
-const isDriveUrl = (u) => /^https:\/\/(drive|docs)\.google\.com\/\S+$/i.test(u || "");
 const savedLink = (key) => ((state.app.items || {})[key] || {}).link || "";
 const draftLink = (key) => (state.linkDrafts[key] !== undefined ? state.linkDrafts[key] : savedLink(key));
 // Teachers edit freely before submitting; afterwards only when the committee sends it back.
@@ -453,7 +464,7 @@ function renderAwardee() {
 
   const rowState = (key) => {
     const d = draftLink(key).trim(), s = savedLink(key);
-    if (d && !isDriveUrl(d)) return `<span class="text-red-700 font-semibold">Not a Google Drive link. It must start with https://drive.google.com/ or https://docs.google.com/</span>`;
+    if (d && !isDriveUrl(d)) return `<span class="text-red-700 font-semibold">Not a valid Google Drive link. In Drive, click Share → Copy link, then paste it here.</span>`;
     if (d !== s) return `<span class="text-amber-700 font-semibold">Not saved yet. Click Save.</span>`;
     if (s) return `<span class="text-blue-700 font-semibold inline-flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i>Saved</span>`;
     return `<span class="text-slate-400">No link yet</span>`;
@@ -544,7 +555,7 @@ function renderAwardee() {
 async function saveLink(key) {
   if (!canEditLinks()) return toast("Links are locked while the committee reviews.", "warn");
   const v = draftLink(key).trim();
-  if (v && !isDriveUrl(v)) return toast("Only Google Drive links are allowed (drive.google.com or docs.google.com).", "warn");
+  if (v && !isDriveUrl(v)) return toast("Not a valid Google Drive link. In Drive, click Share → Copy link, then paste it here.", "warn");
   try {
     await updateDoc(doc(db, "applications", state.user.uid), {
       [`items.${key}`]: v ? { submitted: true, link: v } : { submitted: false, link: "" },
@@ -683,10 +694,10 @@ function renderReview() {
       ${CATEGORIES[cat].items.map((text, i) => {
         const key = `${cat}_${i}`;
         const it = items[key] || {};
-        const url = safeUrl(it.link);
+        const url = isDriveUrl(it.link) ? it.link : "";
         return `<div class="p-3 sm:px-4 flex flex-wrap sm:flex-nowrap gap-x-3 gap-y-2 items-center ${ver[key] ? "bg-emerald-50/60" : ""}">
           <div class="flex-1 min-w-[200px] text-sm font-medium text-slate-800"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
-          ${it.submitted
+          ${hasLink(it)
             ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Saved</span>`
             : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Missing</span>`}
           ${url
@@ -792,11 +803,11 @@ function buildReport(app, review, profile) {
     const rows = CATEGORIES[cat].items.map((text, i) => {
       const key = `${cat}_${i}`;
       const it = items[key] || {};
-      const url = safeUrl(it.link);
+      const url = isDriveUrl(it.link) ? it.link : "";
       return `<tr>
         <td class="num">${i + 1}</td>
         <td>${esc(text)}</td>
-        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">No link submitted</span>`}</td>
+        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">${it.link ? "Invalid link (not Google Drive)" : "No link submitted"}</span>`}</td>
         <td class="mark ${ver[key] ? "yes" : "no"}">${ver[key] ? "✔ Verified" : "—"}</td>
       </tr>`;
     }).join("");
@@ -1117,7 +1128,7 @@ document.addEventListener("click", async (e) => {
     case "verify-ticked": {
       const app = state.apps[state.selected];
       const map = {};
-      checklist(app.award).forEach((r) => { if (app.items && app.items[r.key] && app.items[r.key].submitted) map[r.key] = true; });
+      checklist(app.award).forEach((r) => { if (hasLink(app.items && app.items[r.key])) map[r.key] = true; });
       if (!Object.keys(map).length) return toast("No links saved yet.", "warn");
       await setVerified(map);
       toast(`${Object.keys(map).length} MOVs verified`);
