@@ -64,7 +64,8 @@ service cloud.firestore {
         && (resource.data.get('submittedAt', null) == null
             || (request.resource.data.award == resource.data.award
                 && (request.resource.data.items == resource.data.items || reopened(uid))));
-      allow delete: if false;
+      // Only admins can delete an application (Delete button on the admin side).
+      allow delete: if isAdmin();
     }
 
     match /reviews/{uid} {
