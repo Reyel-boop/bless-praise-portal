@@ -647,6 +647,7 @@ function renderAdmin() {
           <th class="text-left font-bold px-4 py-2.5">Links</th>
           <th class="text-left font-bold px-4 py-2.5">Verified</th>
           <th class="text-left font-bold px-4 py-2.5">Status</th>
+          <th class="text-right font-bold px-4 py-2.5">Report</th>
         </tr></thead>
         <tbody class="divide-y divide-slate-100">
           ${rows.map(({ app, st, p }) => `<tr data-act="open" data-uid="${esc(app.uid)}" tabindex="0" class="hover:bg-blue-50/50 cursor-pointer focus:outline-none focus:bg-blue-50">
@@ -655,6 +656,7 @@ function renderAdmin() {
             <td class="px-4 py-3 tabular text-xs font-bold text-blue-700">${p.sub}/${p.total}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-emerald-700">${p.ver}/${p.total}</td>
             <td class="px-4 py-3 whitespace-nowrap">${pill(st)}</td>
+            <td class="px-4 py-3 text-right"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white transition"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button></td>
           </tr>`).join("")}
         </tbody></table></div>`
       : `<div class="p-10 text-center text-sm text-slate-400">${all.length ? "No applicants match these filters." : "No applicants yet. Teachers appear here once they choose an award."}</div>`}
@@ -707,6 +709,7 @@ function renderReview() {
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
+        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950 text-sm font-bold shadow transition"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
         ${pill(st)}
         <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} links</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
       </div>
@@ -765,6 +768,226 @@ async function saveDecision() {
   } catch (e) {
     toast(errorText(e), "error");
   }
+}
+
+// ----- Admin: per-awardee report (opens in a new tab, print or save as PDF) -----
+const DECISION_TEXT = Object.fromEntries(DECISIONS.map(([k, label, hint]) => [k, { label, hint }]));
+
+function buildReport(app, review, profile) {
+  const a = awardName(app.award);
+  const g = groupOf(app.award);
+  const st = statusOf(app, review);
+  const p = progress(app, review);
+  const items = app.items || {};
+  const ver = (review && review.verified) || {};
+  const pct = (n) => (p.total ? Math.round((n / p.total) * 100) : 0);
+  const now = new Date();
+  const ref = `BP-${now.getFullYear()}-${String(app.uid).slice(0, 6).toUpperCase()}`;
+  const dt = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" }) : "—");
+  const logo = new URL("logo.png", location.href).href;
+  const awardTitle = esc(a.name) + (a.local ? ` <span class="local">(${esc(a.local)})</span>` : "");
+
+  const movTable = (cat) => {
+    const rows = CATEGORIES[cat].items.map((text, i) => {
+      const key = `${cat}_${i}`;
+      const it = items[key] || {};
+      const url = safeUrl(it.link);
+      return `<tr>
+        <td class="num">${i + 1}</td>
+        <td>${esc(text)}</td>
+        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">No link submitted</span>`}</td>
+        <td class="mark ${ver[key] ? "yes" : "no"}">${ver[key] ? "✔ Verified" : "—"}</td>
+      </tr>`;
+    }).join("");
+    const done = CATEGORIES[cat].items.filter((_, i) => ver[`${cat}_${i}`]).length;
+    return `<table class="movs">
+      <thead><tr><th class="num">#</th><th>Means of Verification</th><th>Google Drive link</th><th class="mark">Committee check</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td></td><td colspan="2">Verified in this section</td><td class="mark">${done} / ${CATEGORIES[cat].items.length}</td></tr></tfoot>
+    </table>`;
+  };
+
+  const sections = [
+    ["applicant", "Applicant Information"],
+    ["summary", "Summary of Requirements"],
+    ["general", "Part A · General MOVs"],
+    ["award", `Part B · ${esc(a.name)} MOVs`],
+    ["decision", "Committee Decision and Remarks"],
+    ["signatures", "Certification and Signatures"]
+  ];
+  const sec = (i, id, body) => `<section id="${id}"><h2><span class="sn">${i + 1}</span>${sections[i][1]}</h2>${body}</section>`;
+  const decision = review && review.status ? DECISION_TEXT[review.status] : null;
+
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLESS PRAISE Report · ${esc(app.name)} · ${esc(a.name)}</title>
+<link rel="icon" href="${logo}">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=Playfair+Display:ital,wght@0,700;1,600&display=swap" rel="stylesheet">
+<style>
+  :root { --navy:#0d2342; --navy2:#1e3a8a; --gold:#d97706; --gold2:#f59e0b; --ink:#1e293b; --muted:#64748b; --line:#cbd5e1; --soft:#f1f5f9; --green:#047857; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#e2e8f0; color:var(--ink); font:13px/1.5 "Public Sans", system-ui, sans-serif; }
+  .toolbar { position:sticky; top:0; z-index:5; background:var(--navy); color:#fff; padding:10px 16px; display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  .toolbar button { font:700 13px "Public Sans", sans-serif; border:0; border-radius:8px; padding:9px 16px; cursor:pointer; background:var(--gold2); color:var(--navy); }
+  .page { width:210mm; max-width:100%; margin:18px auto; background:#fff; padding:16mm 16mm 18mm; box-shadow:0 4px 24px rgba(15,23,42,.15); }
+  header.doc { display:flex; gap:14px; align-items:center; border-bottom:3px solid var(--gold2); padding-bottom:12px; }
+  header.doc img { width:64px; height:64px; border-radius:50%; border:2px solid var(--gold2); }
+  .kicker { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+  .school { font-size:17px; font-weight:800; color:var(--navy); }
+  .title { margin:18px 0 2px; font:700 24px/1.2 "Playfair Display", Georgia, serif; color:var(--navy); }
+  .award { font-size:15px; font-weight:700; color:var(--navy2); }
+  .local { font:italic 600 14px "Playfair Display", Georgia, serif; color:var(--gold); }
+  .meta { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:8px; font-size:11.5px; color:var(--muted); }
+  .meta b { color:var(--ink); }
+  .toc { margin:20px 0 6px; border:1px solid var(--line); border-radius:10px; padding:14px 18px; background:var(--soft); }
+  .toc h3 { margin:0 0 8px; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--navy); }
+  .toc ol { margin:0; padding:0; list-style:none; counter-reset:t; }
+  .toc li { display:flex; align-items:baseline; gap:8px; padding:3px 0; }
+  .toc li a { color:var(--ink); text-decoration:none; font-weight:600; }
+  .toc .n { display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:50%; background:var(--navy); color:#fff; font-size:11px; font-weight:700; flex-shrink:0; }
+  .toc .dots { flex:1; border-bottom:1px dotted #94a3b8; transform:translateY(-4px); }
+  .toc .what { color:var(--muted); font-size:11.5px; }
+  section { margin-top:22px; break-inside:avoid-page; }
+  section h2 { display:flex; align-items:center; gap:10px; margin:0 0 10px; font-size:15px; color:var(--navy); border-bottom:1px solid var(--line); padding-bottom:6px; }
+  .sn { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:6px; background:var(--gold2); color:var(--navy); font-size:13px; font-weight:800; }
+  table { width:100%; border-collapse:collapse; }
+  table.kv td { padding:6px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+  table.kv td:first-child { width:34%; color:var(--muted); font-weight:600; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:12px; }
+  .stat { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .stat .v { font-size:22px; font-weight:800; color:var(--navy); font-variant-numeric:tabular-nums; }
+  .stat .l { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700; }
+  .barrow { display:flex; align-items:center; gap:10px; margin:4px 0; font-size:12px; }
+  .barrow .lab { width:110px; color:var(--muted); font-weight:600; }
+  .bar { flex:1; height:9px; background:#e2e8f0; border-radius:9px; overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:9px; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:99px; font-weight:700; font-size:11.5px; border:1px solid var(--line); background:var(--soft); }
+  table.movs th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#fff; background:var(--navy); padding:7px 8px; }
+  table.movs td { padding:7px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+  table.movs tbody tr:nth-child(even) td { background:#f8fafc; }
+  table.movs tr { break-inside:avoid; }
+  table.movs tfoot td { font-weight:700; background:var(--soft); border-top:2px solid var(--navy); }
+  .num { width:28px; text-align:center; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .link { width:36%; word-break:break-all; font-size:11px; }
+  .link a { color:var(--navy2); }
+  .mark { width:96px; text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .mark.yes { color:var(--green); font-weight:700; }
+  .muted { color:#94a3b8; font-style:italic; }
+  .remarks { white-space:pre-line; border-left:4px solid var(--gold2); background:#fffbeb; padding:10px 12px; border-radius:6px; }
+  .sigs { display:grid; grid-template-columns:repeat(3,1fr); gap:22px; margin-top:34px; }
+  .sig { text-align:center; font-size:11.5px; }
+  .sig .line { border-top:1.5px solid var(--ink); padding-top:5px; font-weight:700; min-height:20px; }
+  .sig .role { color:var(--muted); }
+  .cert { font-size:12px; }
+  footer.doc { margin-top:26px; padding-top:8px; border-top:1px solid var(--line); font-size:10.5px; color:var(--muted); display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  @media (max-width: 640px) { .page { padding:16px; } .stats { grid-template-columns:repeat(2,1fr); } .sigs { grid-template-columns:1fr; } .link { width:auto; } }
+  @page { size:A4; margin:14mm; }
+  @media print {
+    body { background:#fff; }
+    .toolbar { display:none; }
+    .page { width:auto; margin:0; padding:0; box-shadow:none; }
+    a { color:inherit; text-decoration:none; }
+    section#general { break-before:page; }
+    th, .sn, .toc .n, tfoot td, .stat, .remarks, tbody tr:nth-child(even) td { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
+</style></head><body>
+<div class="toolbar"><span><b>BLESS PRAISE Report</b> · ${esc(app.name)}</span><button onclick="window.print()">Print / Save as PDF</button></div>
+<main class="page">
+  <header class="doc">
+    <img src="${logo}" alt="BLESS seal">
+    <div>
+      <div class="kicker">Republic of the Philippines · DepEd Region XI · SDO Panabo City</div>
+      <div class="school">San Vicente National High School</div>
+      <div class="kicker" style="letter-spacing:.06em">BLESS Program on Awards and Incentives for Service Excellence (PRAISE)</div>
+    </div>
+  </header>
+
+  <div class="title">Nominee Evaluation Report</div>
+  <div class="award">${awardTitle}</div>
+  <div class="meta">
+    <span>Nominee: <b>${esc(app.name)}</b></span>
+    <span>Reference no.: <b>${ref}</b></span>
+    <span>Generated: <b>${now.toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" })}</b></span>
+  </div>
+
+  <nav class="toc">
+    <h3>Table of Contents</h3>
+    <ol>
+      ${sections.map(([id, label], i) => `<li><span class="n">${i + 1}</span><a href="#${id}">${label}</a><span class="dots"></span><span class="what">${[
+        "Name, position, award",
+        `${p.ver}/${p.total} verified`,
+        `${CATEGORIES[GENERAL].items.length} requirements`,
+        `${CATEGORIES[app.award].items.length} requirements`,
+        decision ? decision.label : "Pending",
+        "Validator and School Head"
+      ][i]}</span></li>`).join("")}
+    </ol>
+  </nav>
+
+  ${sec(0, "applicant", `<table class="kv">
+    <tr><td>Name of nominee</td><td><b>${esc(app.name)}</b></td></tr>
+    <tr><td>Position</td><td>${esc(profile && profile.position) || "—"}</td></tr>
+    <tr><td>Department / Grade level</td><td>${esc(app.dept || (profile && profile.dept)) || "—"}</td></tr>
+    <tr><td>Email</td><td>${esc(profile && profile.email) || "—"}</td></tr>
+    <tr><td>Award category</td><td>${esc(g.name)}</td></tr>
+    <tr><td>Award applied for</td><td><b>${awardTitle}</b></td></tr>
+    <tr><td>Endorsed by</td><td>${esc(app.endorser) || "—"}</td></tr>
+  </table>`)}
+
+  ${sec(1, "summary", `<div class="stats">
+      <div class="stat"><div class="v">${p.total}</div><div class="l">Total MOVs</div></div>
+      <div class="stat"><div class="v">${p.sub}</div><div class="l">Links submitted</div></div>
+      <div class="stat"><div class="v">${p.ver}</div><div class="l">Verified</div></div>
+      <div class="stat"><div class="v">${pct(p.ver)}%</div><div class="l">Completion</div></div>
+    </div>
+    <div class="barrow"><span class="lab">Links submitted</span><span class="bar"><i style="width:${pct(p.sub)}%;background:#2563eb"></i></span><b>${pct(p.sub)}%</b></div>
+    <div class="barrow"><span class="lab">Verified</span><span class="bar"><i style="width:${pct(p.ver)}%;background:#10b981"></i></span><b>${pct(p.ver)}%</b></div>
+    <table class="kv" style="margin-top:10px">
+      <tr><td>Status</td><td><span class="pill">${STATUS[st].label}</span></td></tr>
+      <tr><td>Date submitted</td><td>${dt(app.submittedAt)}</td></tr>
+      <tr><td>Last updated by nominee</td><td>${dt(app.updatedAt)}</td></tr>
+    </table>`)}
+
+  ${sec(2, "general", `<p class="what" style="margin:0 0 8px;color:var(--muted)">Required of every nominee regardless of category.</p>${movTable(GENERAL)}`)}
+
+  ${sec(3, "award", `<p style="margin:0 0 8px;color:var(--muted)">${esc(CATEGORIES[app.award].description)}</p>${movTable(app.award)}`)}
+
+  ${sec(4, "decision", `<table class="kv">
+      <tr><td>Decision</td><td>${decision ? `<b>${decision.label}</b> · ${decision.hint}` : `<span class="muted">No decision recorded yet</span>`}</td></tr>
+      <tr><td>Recorded by</td><td>${esc(review && review.reviewer) || "—"}</td></tr>
+      <tr><td>Date recorded</td><td>${dt(review && review.reviewedAt)}</td></tr>
+    </table>
+    <div style="margin-top:10px"><div class="kicker" style="margin-bottom:4px">Remarks</div>
+      <div class="remarks">${review && review.remarks ? esc(review.remarks) : "None."}</div></div>`)}
+
+  ${sec(5, "signatures", `<p class="cert">We certify that the Means of Verification listed in this report were reviewed against the BLESS PRAISE
+      standardized MOVs checklist, in accordance with Civil Service Commission and DepEd guidelines.</p>
+    <div class="sigs">
+      <div class="sig"><div class="line">${esc(app.name)}</div><div class="role">Nominee</div></div>
+      <div class="sig"><div class="line">&nbsp;</div><div class="role">PRAISE Committee Validator</div></div>
+      <div class="sig"><div class="line">&nbsp;</div><div class="role">School Head / PRAISE Chair</div></div>
+    </div>`)}
+
+  <footer class="doc"><span>BLESS PRAISE Portal · San Vicente National High School</span><span>${ref}</span></footer>
+</main>
+</body></html>`;
+}
+
+async function generateReport(uid) {
+  const app = state.apps[uid];
+  if (!app) return;
+  // Open the tab right away so pop-up blockers allow it, then fill it.
+  const w = window.open("", "_blank");
+  if (!w) return toast("Allow pop-ups for this site to open the report.", "warn");
+  w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Preparing report…</p>');
+  let profile = null;
+  try {
+    const snap = await getDoc(doc(db, "users", uid));
+    profile = snap.exists() ? snap.data() : null;
+  } catch (e) { profile = null; }
+  w.document.open();
+  w.document.write(buildReport(app, state.reviews[uid], profile));
+  w.document.close();
 }
 
 // ----- Guidelines (both roles) -----
@@ -847,6 +1070,7 @@ document.addEventListener("click", async (e) => {
     case "do-submit": doSubmit(); break;
     case "open": state.selected = el.dataset.uid; window.scrollTo({ top: 0 }); render(); break;
     case "back": state.selected = null; render(); break;
+    case "report": generateReport(el.dataset.uid); break;
     case "verify-ticked": {
       const app = state.apps[state.selected];
       const map = {};
