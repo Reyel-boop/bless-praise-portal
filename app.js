@@ -734,6 +734,14 @@ document.addEventListener("click", async (e) => {
   if (!el) return;
   const act = el.dataset.act;
   switch (act) {
+    case "home":
+      // Logo: back to the main screen (award checklist or applicants list) without reloading.
+      e.preventDefault();
+      closeModal();
+      Object.assign(state, { tab: "main", selected: null, picking: false, authMode: "login" });
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      break;
     case "signout": await signOut(auth); break;
     case "tab": state.tab = el.dataset.tab; render(); break;
     case "auth-mode": state.authMode = el.dataset.mode; render(); break;
