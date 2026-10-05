@@ -329,22 +329,22 @@ function renderVerify() {
 
 // ----- Awardee: choose award -----
 
-// Each award is a gradient tile with its own colors and a filled Material icon on the award picker.
+// Each award is a gradient tile with its own colors and an award-style Material icon (trophy, medal, badge…).
 // Class strings are written out in full so the Tailwind CDN generates them.
 const AWARD_STYLE = {
-  "cat-teach-1": { icon: "school", tile: "bg-gradient-to-br from-red-500 to-orange-400" },
-  "cat-teach-2": { icon: "lightbulb", tile: "bg-gradient-to-br from-violet-500 to-fuchsia-500" },
-  "cat-teach-3": { icon: "science", tile: "bg-gradient-to-br from-sky-500 to-blue-700" },
-  "cat-teach-4": { icon: "explore", tile: "bg-gradient-to-br from-indigo-500 to-blue-600" },
-  "cat-teach-5": { icon: "groups", tile: "bg-gradient-to-br from-pink-400 to-pink-600" },
-  "cat-teach-6": { icon: "volunteer_activism", tile: "bg-gradient-to-br from-emerald-500 to-teal-700" },
-  "cat-teach-7": { icon: "workspace_premium", tile: "bg-gradient-to-br from-amber-500 to-orange-600" },
-  "cat-nonteach-1": { icon: "support_agent", tile: "bg-gradient-to-br from-cyan-500 to-teal-600" },
-  "cat-nonteach-2": { icon: "speed", tile: "bg-gradient-to-br from-lime-600 to-green-700" },
-  "cat-nonteach-3": { icon: "favorite", tile: "bg-gradient-to-br from-rose-500 to-pink-600" },
-  "cat-nonteach-4": { icon: "handshake", tile: "bg-gradient-to-br from-orange-500 to-amber-600" },
-  "cat-special-1": { icon: "menu_book", tile: "bg-gradient-to-br from-fuchsia-500 to-purple-700" },
-  "cat-special-2": { icon: "bolt", tile: "bg-gradient-to-br from-red-600 to-rose-500" }
+  "cat-teach-1": { icon: "emoji_events", tile: "bg-gradient-to-br from-red-500 to-orange-400" },
+  "cat-teach-2": { icon: "military_tech", tile: "bg-gradient-to-br from-violet-500 to-fuchsia-500" },
+  "cat-teach-3": { icon: "workspace_premium", tile: "bg-gradient-to-br from-sky-500 to-blue-700" },
+  "cat-teach-4": { icon: "stars", tile: "bg-gradient-to-br from-indigo-500 to-blue-600" },
+  "cat-teach-5": { icon: "verified", tile: "bg-gradient-to-br from-pink-400 to-pink-600" },
+  "cat-teach-6": { icon: "star", tile: "bg-gradient-to-br from-emerald-500 to-teal-700" },
+  "cat-teach-7": { icon: "local_police", tile: "bg-gradient-to-br from-amber-500 to-orange-600" },
+  "cat-nonteach-1": { icon: "auto_awesome", tile: "bg-gradient-to-br from-cyan-500 to-teal-600" },
+  "cat-nonteach-2": { icon: "diamond", tile: "bg-gradient-to-br from-lime-600 to-green-700" },
+  "cat-nonteach-3": { icon: "verified_user", tile: "bg-gradient-to-br from-rose-500 to-pink-600" },
+  "cat-nonteach-4": { icon: "stars", tile: "bg-gradient-to-br from-orange-500 to-amber-600" },
+  "cat-special-1": { icon: "local_activity", tile: "bg-gradient-to-br from-fuchsia-500 to-purple-700" },
+  "cat-special-2": { icon: "military_tech", tile: "bg-gradient-to-br from-red-600 to-rose-500" }
 };
 
 function renderPicker() {
