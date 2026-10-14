@@ -4,10 +4,11 @@ import {
   sendEmailVerification, sendPasswordResetEmail, signOut, updateProfile
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, serverTimestamp, writeBatch
+  getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where,
+  serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { CATEGORIES, AWARD_GROUPS, GENERAL } from "./data.js";
+import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS } from "./data.js";
 
 // ---------- Helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -120,6 +121,7 @@ function bar(label, n, total, color) {
     <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${color.bar}" style="width:${pct}%"></div></div>
   </div>`;
 }
+const statTile = (label, n, cls) => `<div class="rounded-xl border p-4 ${cls}"><div class="text-[11px] font-bold uppercase tracking-wider opacity-80">${label}</div><div class="tabular text-2xl font-extrabold mt-0.5">${n}</div></div>`;
 const BLUE = { text: "text-blue-700", bar: "bg-blue-600" };
 const GREEN = { text: "text-emerald-700", bar: "bg-emerald-500" };
 
@@ -130,7 +132,10 @@ const state = {
   apps: {}, reviews: {}, selected: null, drafts: {},
   filter: { q: "", award: "", status: "" },
   tab: "main", authMode: "login", unsubs: [],
-  linkDrafts: {}
+  linkDrafts: {},
+  // Monitoring (see the Monitoring section below)
+  perms: null, mon: null, rep: null,
+  personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
 
@@ -147,18 +152,24 @@ if (!configured) {
 
 async function onUser(u) {
   state.unsubs.forEach((f) => f());
+  Object.values(state.watches).forEach((f) => f());
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false,
-    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}
+    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {},
+    perms: null, mon: freshMon(), rep: freshRep(),
+    personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
   if (!u.emailVerified) return render();
 
   let isAdmin = false;
   try { isAdmin = (await getDoc(doc(db, "admins", u.email))).exists(); } catch (e) { isAdmin = false; }
+  const perms = isAdmin ? { admin: true, hr: true, clinic: true, dll: true, subjects: SUBJECTS.slice() } : await loadPerms(u.email);
   if (state.user !== u) return; // signed out meanwhile
   state.role = isAdmin ? "admin" : "awardee";
+  state.perms = perms;
   state.tab = isAdmin ? "main" : "home";
+  startMonitoring();
 
   if (isAdmin) {
     state.unsubs.push(onSnapshot(collection(db, "applications"), (snap) => {
@@ -203,6 +214,8 @@ function render() {
   else if (!state.user.emailVerified) renderVerify();
   else if (!state.role || !state.loaded) main.innerHTML = `<div class="py-24 text-center text-slate-400 text-sm">Loading your account…</div>`;
   else if (state.tab === "guide") renderGuide();
+  else if (state.tab === "monitor" && state.perms) renderMonitor();
+  else if (state.tab === "reports" && state.perms) renderReports();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
   icons();
@@ -222,15 +235,20 @@ function renderHeader() {
     : state.role === "awardee"
       ? `<span class="px-2 py-0.5 rounded-full bg-white/15 border border-white/20 text-white font-bold text-[10px] uppercase tracking-wider">Awardee</span>`
       : "";
-  box.innerHTML = `${role}
+  const duties = state.perms && !state.perms.admin
+    ? PERM_LABELS.filter(([k]) => state.perms[k]).map(([, t]) => `<span class="hidden md:inline px-2 py-0.5 rounded-full bg-depedGold-500/20 border border-depedGold-500/40 text-depedGold-400 font-bold text-[10px] uppercase tracking-wider">${t}</span>`).join("")
+    : "";
+  box.innerHTML = `${role}${duties}
     <span class="hidden sm:inline text-slate-200 max-w-[200px] truncate">${esc(myName())}</span>
     <button data-act="signout" class="no-print inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white px-3 py-1.5 rounded-lg font-medium transition">
       <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Sign out</button>`;
 
   if (!state.role) { tabs.classList.add("hidden"); return; }
   const items = state.role === "admin"
-    ? [["main", "Applicants", "users"], ["guide", "Guidelines", "book-open"]]
-    : [["home", "Home", "house"], ["main", "My Award", "award"], ["guide", "Guidelines", "book-open"]];
+    ? [["main", "Applicants", "users"]]
+    : [["home", "Home", "house"], ["main", "My Award", "award"]];
+  if (state.perms) items.push(["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"]);
+  items.push(["guide", "Guidelines", "book-open"]);
   tabs.classList.remove("hidden");
   tabs.firstElementChild.innerHTML = items.map(([id, label, icon]) => {
     const on = state.tab === id;
@@ -630,14 +648,13 @@ function renderAdmin() {
     .sort((x, y) => (x.st === "submitted" ? 0 : 1) - (y.st === "submitted" ? 0 : 1) || String(x.app.name).localeCompare(String(y.app.name)));
 
   const count = (s) => all.filter((r) => r.st === s).length;
-  const tile = (label, n, cls) => `<div class="rounded-xl border p-4 ${cls}"><div class="text-[11px] font-bold uppercase tracking-wider opacity-80">${label}</div><div class="tabular text-2xl font-extrabold mt-0.5">${n}</div></div>`;
 
   main.innerHTML = `
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-      ${tile("Applicants", all.length, "bg-brand-900 text-white border-brand-950")}
-      ${tile("Awaiting review", count("submitted"), "bg-blue-50 text-blue-900 border-blue-200")}
-      ${tile("For compliance", count("compliance") + count("incomplete"), "bg-amber-50 text-amber-900 border-amber-300")}
-      ${tile("Qualified", count("qualified"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
+      ${statTile("Applicants", all.length, "bg-brand-900 text-white border-brand-950")}
+      ${statTile("Awaiting review", count("submitted"), "bg-blue-50 text-blue-900 border-blue-200")}
+      ${statTile("For compliance", count("compliance") + count("incomplete"), "bg-amber-50 text-amber-900 border-amber-300")}
+      ${statTile("Qualified", count("qualified"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
     </div>
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="p-3 sm:p-4 border-b border-slate-200 flex flex-wrap gap-2">
@@ -785,57 +802,8 @@ async function saveDecision() {
 // ----- Admin: per-awardee report (opens in a new tab, print or save as PDF) -----
 const DECISION_TEXT = Object.fromEntries(DECISIONS.map(([k, label, hint]) => [k, { label, hint }]));
 
-function buildReport(app, review, profile) {
-  const a = awardName(app.award);
-  const g = groupOf(app.award);
-  const st = statusOf(app, review);
-  const p = progress(app, review);
-  const items = app.items || {};
-  const ver = (review && review.verified) || {};
-  const pct = (n) => (p.total ? Math.round((n / p.total) * 100) : 0);
-  const now = new Date();
-  const ref = `BP-${now.getFullYear()}-${String(app.uid).slice(0, 6).toUpperCase()}`;
-  const dt = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" }) : "—");
-  const logo = new URL("logo.png", location.href).href;
-  const awardTitle = esc(a.name) + (a.local ? ` <span class="local">(${esc(a.local)})</span>` : "");
-
-  const movTable = (cat) => {
-    const rows = CATEGORIES[cat].items.map((text, i) => {
-      const key = `${cat}_${i}`;
-      const it = items[key] || {};
-      const url = isDriveUrl(it.link) ? it.link : "";
-      return `<tr>
-        <td class="num">${i + 1}</td>
-        <td>${esc(text)}</td>
-        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">${it.link ? "Invalid link (not Google Drive)" : "No link submitted"}</span>`}</td>
-        <td class="mark ${ver[key] ? "yes" : "no"}">${ver[key] ? "✔ Verified" : "—"}</td>
-      </tr>`;
-    }).join("");
-    const done = CATEGORIES[cat].items.filter((_, i) => ver[`${cat}_${i}`]).length;
-    return `<table class="movs">
-      <thead><tr><th class="num">#</th><th>Means of Verification</th><th>Google Drive link</th><th class="mark">Committee check</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot><tr><td></td><td colspan="2">Verified in this section</td><td class="mark">${done} / ${CATEGORIES[cat].items.length}</td></tr></tfoot>
-    </table>`;
-  };
-
-  const sections = [
-    ["applicant", "Applicant Information"],
-    ["summary", "Summary of Requirements"],
-    ["general", "Part A · General MOVs"],
-    ["award", `Part B · ${esc(a.name)} MOVs`],
-    ["decision", "Committee Decision and Remarks"],
-    ["signatures", "Certification and Signatures"]
-  ];
-  const sec = (i, id, body) => `<section id="${id}"><h2><span class="sn">${i + 1}</span>${sections[i][1]}</h2>${body}</section>`;
-  const decision = review && review.status ? DECISION_TEXT[review.status] : null;
-
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BLESS PRAISE Report · ${esc(app.name)} · ${esc(a.name)}</title>
-<link rel="icon" href="${logo}">
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=Playfair+Display:ital,wght@0,700;1,600&display=swap" rel="stylesheet">
-<style>
+// Shared by every printable report.
+const REPORT_CSS = `
   :root { --navy:#0d2342; --navy2:#1e3a8a; --gold:#d97706; --gold2:#f59e0b; --ink:#1e293b; --muted:#64748b; --line:#cbd5e1; --soft:#f1f5f9; --green:#047857; }
   * { box-sizing: border-box; }
   body { margin:0; background:#e2e8f0; color:var(--ink); font:13px/1.5 "Public Sans", system-ui, sans-serif; }
@@ -902,7 +870,64 @@ function buildReport(app, review, profile) {
     section#general { break-before:page; }
     th, .sn, .toc .n, tfoot td, .stat, .remarks, tbody tr:nth-child(even) td { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
-</style></head><body>
+  .empty { padding:14px; text-align:center; color:#94a3b8; font-style:italic; border:1px dashed var(--line); border-radius:8px; }
+  .names { margin:0; padding-left:20px; columns:2; column-gap:28px; font-size:12px; }
+  .names li { break-inside:avoid; padding:1px 0; }
+  .lead { margin:0 0 8px; color:var(--muted); }
+  .best { border-left:4px solid var(--gold2); background:#fffbeb; padding:10px 12px; border-radius:6px; margin-top:10px; }
+`;
+
+function buildReport(app, review, profile) {
+  const a = awardName(app.award);
+  const g = groupOf(app.award);
+  const st = statusOf(app, review);
+  const p = progress(app, review);
+  const items = app.items || {};
+  const ver = (review && review.verified) || {};
+  const pct = (n) => (p.total ? Math.round((n / p.total) * 100) : 0);
+  const now = new Date();
+  const ref = `BP-${now.getFullYear()}-${String(app.uid).slice(0, 6).toUpperCase()}`;
+  const dt = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" }) : "—");
+  const logo = new URL("logo.png", location.href).href;
+  const awardTitle = esc(a.name) + (a.local ? ` <span class="local">(${esc(a.local)})</span>` : "");
+
+  const movTable = (cat) => {
+    const rows = CATEGORIES[cat].items.map((text, i) => {
+      const key = `${cat}_${i}`;
+      const it = items[key] || {};
+      const url = isDriveUrl(it.link) ? it.link : "";
+      return `<tr>
+        <td class="num">${i + 1}</td>
+        <td>${esc(text)}</td>
+        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">${it.link ? "Invalid link (not Google Drive)" : "No link submitted"}</span>`}</td>
+        <td class="mark ${ver[key] ? "yes" : "no"}">${ver[key] ? "✔ Verified" : "—"}</td>
+      </tr>`;
+    }).join("");
+    const done = CATEGORIES[cat].items.filter((_, i) => ver[`${cat}_${i}`]).length;
+    return `<table class="movs">
+      <thead><tr><th class="num">#</th><th>Means of Verification</th><th>Google Drive link</th><th class="mark">Committee check</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td></td><td colspan="2">Verified in this section</td><td class="mark">${done} / ${CATEGORIES[cat].items.length}</td></tr></tfoot>
+    </table>`;
+  };
+
+  const sections = [
+    ["applicant", "Applicant Information"],
+    ["summary", "Summary of Requirements"],
+    ["general", "Part A · General MOVs"],
+    ["award", `Part B · ${esc(a.name)} MOVs`],
+    ["decision", "Committee Decision and Remarks"],
+    ["signatures", "Certification and Signatures"]
+  ];
+  const sec = (i, id, body) => `<section id="${id}"><h2><span class="sn">${i + 1}</span>${sections[i][1]}</h2>${body}</section>`;
+  const decision = review && review.status ? DECISION_TEXT[review.status] : null;
+
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLESS PRAISE Report · ${esc(app.name)} · ${esc(a.name)}</title>
+<link rel="icon" href="${logo}">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=Playfair+Display:ital,wght@0,700;1,600&display=swap" rel="stylesheet">
+<style>${REPORT_CSS}</style></head><body>
 <div class="toolbar"><span><b>BLESS PRAISE Report</b> · ${esc(app.name)}</span><button onclick="window.print()">Print / Save as PDF</button></div>
 <main class="page">
   <header class="doc">
@@ -1042,6 +1067,872 @@ async function generateReport(uid) {
   w.document.close();
 }
 
+// ---------- Monitoring: Attendance · AOR · Daily Lesson Log ----------
+// Access comes from monitors/{email}, set by admins under Monitoring → Staff access.
+//   hr      Human Resource: attendance of teaching and non-teaching personnel, personnel list
+//   clinic  School Clinic: AOR, cleanest classroom per week (1st, 2nd, 3rd)
+//   dll     Head / Master Teachers: Daily Lesson Log, only for their own subject areas
+// Admins have all of it, plus Staff access.
+const pad = (n) => String(n).padStart(2, "0");
+const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseDay = (s) => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || "") && !isNaN(parseDay(s));
+const todayIso = () => isoDay(new Date());
+const addDays = (s, n) => { const d = parseDay(s); d.setDate(d.getDate() + n); return isoDay(d); };
+const mondayOf = (s) => addDays(s, -((parseDay(s).getDay() + 6) % 7));
+const fmtDay = (s, opt = { month: "short", day: "numeric", year: "numeric" }) => (isDay(s) ? parseDay(s).toLocaleDateString("en-PH", opt) : "—");
+const fmtWeek = (w) => `${fmtDay(w, { month: "short", day: "numeric" })} – ${fmtDay(addDays(w, 4))}`;
+const fmtMonth = (ym) => parseDay(ym + "-01").toLocaleDateString("en-PH", { month: "long", year: "numeric" });
+const periodText = (from, to) => (from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`);
+const fmtTime = (t) => {
+  if (!/^\d{2}:\d{2}$/.test(t || "")) return "";
+  const [h, m] = t.split(":").map(Number);
+  return `${h % 12 || 12}:${pad(m)} ${h < 12 ? "AM" : "PM"}`;
+};
+const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+
+const PTYPE = { teaching: "Teaching", nonteaching: "Non-teaching" };
+const DURATION = { whole: ["Whole day", 1], am: ["Half day (AM)", 0.5], pm: ["Half day (PM)", 0.5] };
+const DLL_STATUS = {
+  ontime: { label: "On time", cls: "bg-emerald-600 text-white border-emerald-700" },
+  late: { label: "Late", cls: "bg-amber-400 text-amber-950 border-amber-500" },
+  missing: { label: "Not submitted", cls: "bg-red-600 text-white border-red-700" }
+};
+// key, label, medal, points
+const PLACES = [["first", "1st", "🥇", 3], ["second", "2nd", "🥈", 2], ["third", "3rd", "🥉", 1]];
+const PERM_LABELS = [["hr", "HR"], ["clinic", "Clinic"], ["dll", "Head / Master Teacher"]];
+
+function schoolYearStart() {
+  const d = new Date();
+  return `${d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1}-06-01`;
+}
+const PRESETS = {
+  week: () => [mondayOf(todayIso()), todayIso()],
+  month: () => [todayIso().slice(0, 8) + "01", todayIso()],
+  lastmonth: () => { const d = new Date(); d.setDate(0); const e = isoDay(d); return [e.slice(0, 8) + "01", e]; },
+  sy: () => [schoolYearStart(), todayIso()]
+};
+function freshMon() {
+  return { view: "", month: todayIso().slice(0, 7), week: mondayOf(todayIso()), subject: "", q: "", ptype: "" };
+}
+function freshRep() {
+  return { att: PRESETS.month(), aor: PRESETS.month(), dll: PRESETS.month(), attType: "", dllSubject: "" };
+}
+
+async function loadPerms(email) {
+  try {
+    const snap = await getDoc(doc(db, "monitors", email));
+    if (!snap.exists()) return null;
+    const m = snap.data();
+    const p = { hr: m.hr === true, clinic: m.clinic === true, dll: m.dll === true, subjects: (m.subjects || []).filter((s) => SUBJECTS.includes(s)) };
+    return p.hr || p.clinic || p.dll ? p : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Live listeners, replaced when the month / week changes and dropped on sign-out.
+function watch(key, ref, set) {
+  if (state.watches[key]) state.watches[key]();
+  state.watches[key] = onSnapshot(ref, (snap) => {
+    const out = {};
+    snap.forEach((d) => { out[d.id] = { id: d.id, ...d.data() }; });
+    set(out);
+    render();
+  }, (e) => toast(errorText(e), "error"));
+}
+function startMonitoring() {
+  const p = state.perms;
+  if (!p) return;
+  if (p.hr || p.dll) watch("personnel", collection(db, "personnel"), (d) => { state.personnel = d; });
+  if (p.clinic) watch("aor", collection(db, "aor"), (d) => { state.aor = d; });
+  if (p.admin) watch("monitors", collection(db, "monitors"), (d) => { state.monitors = d; });
+  if (p.hr) watchAttendance();
+  if (p.dll) watchDll();
+}
+function watchAttendance() {
+  const m = state.mon.month;
+  watch("attendance", query(collection(db, "attendance"), where("date", ">=", `${m}-01`), where("date", "<=", `${m}-31`)),
+    (d) => { state.attendance = d; });
+}
+function watchDll() {
+  state.dllDrafts = {};
+  watch("dll", query(collection(db, "dll"), where("week", "==", state.mon.week)), (d) => { state.dll = d; });
+}
+
+// ----- Shared bits -----
+const inputCls = "text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+const btnDark = "inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-xs font-bold shadow transition";
+const btnLight = "inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition";
+const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+const lbl = (forId, text) => `<label for="${forId}" class="block text-xs font-semibold text-slate-700 mb-1">${text}</label>`;
+const chip = (text, cls) => `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${cls}">${text}</span>`;
+const panel = (inner) => `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">${inner}</div>`;
+const panelHead = (title, right = "") => `<div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-bold text-slate-800">${title}</h3>${right}</div>`;
+const empty = (msg) => `<div class="p-10 text-center text-sm text-slate-400">${msg}</div>`;
+const table = (heads, rows) => `<div class="overflow-x-auto"><table class="w-full text-sm">
+  <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>${heads.map((h) => `<th class="text-left font-bold px-4 py-2.5 whitespace-nowrap">${h}</th>`).join("")}</tr></thead>
+  <tbody class="divide-y divide-slate-100">${rows.join("")}</tbody></table></div>`;
+const selectBox = (id, act, options, value, cls = "") => `<select id="${id}" ${act ? `data-act="${act}"` : ""} class="${inputCls} ${cls}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
+const iconBtn = (act, id, icon, title) => `<button data-act="${act}" data-id="${esc(id)}" title="${title}" class="p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"><i data-lucide="${icon}" class="w-4 h-4"></i></button>`;
+const delBtn = (col, id) => `<button data-act="mon-del" data-col="${col}" data-id="${esc(id)}" title="Delete" class="p-1.5 rounded-md text-red-500 hover:text-red-700 hover:bg-red-50 transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
+const modalHead = (title, sub = "") => `<div class="bg-gradient-to-r from-brand-950 to-brand-900 text-white px-6 py-4 border-b-2 border-depedGold-500"><h3 class="text-base font-bold">${title}</h3>${sub ? `<p class="text-xs text-slate-300">${sub}</p>` : ""}</div>`;
+const modalFoot = (act, text, id = "") => `<div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+  <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+  <button data-act="${act}" data-id="${esc(id)}" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">${text}</button></div>`;
+const pageHead = (title, icon, sub) => `<div class="flex items-center gap-3 pb-3 mb-5 border-b border-slate-300">
+  <div class="w-10 h-10 rounded-xl bg-brand-900 text-depedGold-400 flex items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+  <div><h2 class="text-xl sm:text-2xl font-bold text-brand-900 leading-tight">${title}</h2><p class="text-sm text-slate-600">${sub}</p></div></div>`;
+
+// ----- Monitoring page -----
+function monViews() {
+  const p = state.perms || {};
+  return [
+    ["attendance", "Attendance", "calendar-x", p.hr],
+    ["aor", "AOR · Cleanest classroom", "sparkles", p.clinic],
+    ["dll", "Daily Lesson Log", "book-open-check", p.dll],
+    ["personnel", "Personnel", "users", p.hr || p.dll],
+    ["access", "Staff access", "shield-check", p.admin]
+  ].filter((v) => v[3]);
+}
+
+function renderMonitor() {
+  const views = monViews();
+  if (!views.some((v) => v[0] === state.mon.view)) state.mon.view = views[0][0];
+  const body = { attendance: monAttendance, aor: monAor, dll: monDll, personnel: monPersonnel, access: monAccess }[state.mon.view]();
+  main.innerHTML = `${pageHead("Monitoring", "clipboard-check", "Attendance, AOR (Area of Responsibility) and Daily Lesson Logs")}
+    <div class="flex flex-wrap gap-2 mb-5">
+      ${views.map(([id, text, icon]) => `<button data-act="mon-view" data-view="${id}" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-semibold border transition ${state.mon.view === id ? "bg-brand-900 text-white border-brand-950 shadow" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}">
+        <i data-lucide="${icon}" class="w-4 h-4"></i>${text}</button>`).join("")}
+    </div>
+    ${body}`;
+}
+
+// ----- Attendance (HR) -----
+function attendanceSummary(recs) {
+  const m = {};
+  for (const r of recs) {
+    const s = (m[r.pid] ||= { pid: r.pid, name: r.name, ptype: r.ptype, days: 0, lates: 0, minutes: 0 });
+    if (r.type === "absent") s.days += (DURATION[r.duration] || DURATION.whole)[1];
+    else { s.lates++; s.minutes += Number(r.minutes) || 0; }
+  }
+  return Object.values(m).sort(byName);
+}
+
+function attRecord(r) {
+  if (r.type === "absent") {
+    const half = r.duration && r.duration !== "whole" ? ` · ${(DURATION[r.duration] || DURATION.whole)[0]}` : "";
+    return `${chip("Absent", "bg-red-50 text-red-800 border-red-200")}<div class="text-xs text-slate-600 mt-1">${esc(r.kind || "—")}${half}</div>`;
+  }
+  const bits = [r.minutes ? `${r.minutes} min late` : "", r.timeIn ? `in at ${fmtTime(r.timeIn)}` : ""].filter(Boolean).join(" · ");
+  return `${chip("Late", "bg-amber-50 text-amber-800 border-amber-300")}${bits ? `<div class="text-xs text-slate-600 mt-1">${bits}</div>` : ""}`;
+}
+
+function monAttendance() {
+  const f = state.mon;
+  const all = Object.values(state.attendance);
+  const recs = all
+    .filter((r) => !f.ptype || r.ptype === f.ptype)
+    .filter((r) => !f.q || String(r.name).toLowerCase().includes(f.q.toLowerCase()))
+    .sort((a, b) => b.date.localeCompare(a.date) || byName(a, b));
+  const sum = attendanceSummary(recs);
+  const days = sum.reduce((n, s) => n + s.days, 0);
+  const lates = sum.reduce((n, s) => n + s.lates, 0);
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <input id="mon-month" type="month" data-act="mon-month" value="${f.month}" title="Month" class="${inputCls}">
+      <input id="mon-q" data-act="mon-q" value="${esc(f.q)}" placeholder="Search name" class="${inputCls} flex-1 min-w-[160px]">
+      ${selectBox("mon-ptype", "mon-ptype", [["", "All personnel"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], f.ptype)}
+      <button data-act="att-new" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>Record absence / late</button>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      ${statTile("Days absent", days, "bg-red-50 text-red-900 border-red-200")}
+      ${statTile("Times late", lates, "bg-amber-50 text-amber-900 border-amber-300")}
+      ${statTile("Personnel with records", sum.length, "bg-blue-50 text-blue-900 border-blue-200")}
+      ${statTile("Personnel on list", Object.keys(state.personnel).length, "bg-brand-900 text-white border-brand-950")}
+    </div>
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div class="xl:col-span-2 min-w-0">${panel(panelHead(`Absences and tardiness · ${fmtMonth(f.month)}`) + (recs.length
+        ? table(["Date", "Name", "Record", "Remarks", ""], recs.map((r) => `<tr>
+            <td class="px-4 py-3 whitespace-nowrap tabular text-xs font-semibold text-slate-700">${fmtDay(r.date, { weekday: "short", month: "short", day: "numeric" })}</td>
+            <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(r.name)}</div><div class="text-xs text-slate-500">${PTYPE[r.ptype] || ""}</div></td>
+            <td class="px-4 py-3">${attRecord(r)}</td>
+            <td class="px-4 py-3 text-xs text-slate-600 max-w-[260px] whitespace-pre-line">${esc(r.remarks) || "—"}</td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("att-edit", r.id, "pencil", "Edit")}${delBtn("attendance", r.id)}</td>
+          </tr>`))
+        : empty(all.length ? "No records match these filters." : `No absences or tardiness recorded for ${fmtMonth(f.month)}.`)))}</div>
+      <div class="min-w-0">${panel(panelHead("Summary per person") + (sum.length
+        ? table(["Name", "Absent", "Late"], sum.map((s) => `<tr>
+            <td class="px-4 py-2.5"><div class="font-semibold text-slate-900">${esc(s.name)}</div><div class="text-[11px] text-slate-500">${PTYPE[s.ptype] || ""}</div></td>
+            <td class="px-4 py-2.5 tabular text-xs font-bold text-red-700 whitespace-nowrap">${s.days ? `${s.days} day${s.days === 1 ? "" : "s"}` : "—"}</td>
+            <td class="px-4 py-2.5 tabular text-xs font-bold text-amber-700 whitespace-nowrap">${s.lates ? `${s.lates}×${s.minutes ? ` · ${s.minutes} min` : ""}` : "—"}</td>
+          </tr>`))
+        : empty("Nothing recorded.")))}</div>
+    </div>`;
+}
+
+function openAttendance(id) {
+  const r = id ? state.attendance[id] : null;
+  const people = Object.values(state.personnel).sort(byName);
+  if (!people.length && !r) return toast("Add personnel first under Monitoring → Personnel.", "warn");
+  const type = r ? r.type : "absent";
+  const group = (pt) => {
+    const list = people.filter((p) => p.type === pt);
+    return list.length ? `<optgroup label="${PTYPE[pt]}">${list.map((p) => `<option value="${esc(p.id)}" ${r && r.pid === p.id ? "selected" : ""}>${esc(p.name)}${p.position ? ` · ${esc(p.position)}` : ""}</option>`).join("")}</optgroup>` : "";
+  };
+  const typeBtn = (k, text, icon) => `<label class="cursor-pointer">
+    <input type="radio" name="att-type" value="${k}" data-act="att-type" ${type === k ? "checked" : ""} class="sr-only peer">
+    <span class="flex items-center justify-center gap-2 py-2.5 rounded-lg border-2 text-sm font-bold transition border-slate-200 text-slate-500 peer-checked:border-brand-800 peer-checked:bg-brand-50 peer-checked:text-brand-900"><i data-lucide="${icon}" class="w-4 h-4"></i>${text}</span></label>`;
+  const kinds = ABSENCE_KINDS.slice();
+  if (r && r.kind && !kinds.includes(r.kind)) kinds.push(r.kind);
+  openModal(`${modalHead(r ? "Edit attendance record" : "Record absence or tardiness", "Human Resource · Attendance monitoring")}
+    <div class="p-6 space-y-4">
+      <div>${lbl("att-pid", "Name")}
+        <select id="att-pid" class="w-full ${inputCls}">
+          <option value="">Choose teacher or non-teaching personnel…</option>
+          ${r && !state.personnel[r.pid] ? `<option value="${esc(r.pid)}" selected>${esc(r.name)} (removed from list)</option>` : ""}
+          ${group("teaching")}${group("nonteaching")}
+        </select></div>
+      <div class="grid grid-cols-2 gap-2">${typeBtn("absent", "Absent", "user-x")}${typeBtn("late", "Late / Tardy", "clock")}</div>
+      <div id="att-absent" class="space-y-3 ${type === "absent" ? "" : "hidden"}">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${field("att-from", r ? "Date" : "Date (from)", "date", `value="${r && r.type === "absent" ? r.date : todayIso()}"`)}
+          ${r ? "" : field("att-to", 'To <span class="font-normal text-slate-400">(if more than 1 day)</span>', "date")}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>${lbl("att-kind", "Kind of absence")}<select id="att-kind" class="w-full ${inputCls}"><option value="">Choose…</option>${kinds.map((k) => `<option ${r && r.kind === k ? "selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
+          <div>${lbl("att-duration", "Duration")}${selectBox("att-duration", "", Object.entries(DURATION).map(([k, [t]]) => [k, t]), r && r.duration ? r.duration : "whole", "w-full")}</div>
+        </div>
+        ${r ? "" : `<p class="text-[11px] text-slate-500">For several days, also set <strong>To</strong>. Saturdays and Sundays in between are skipped.</p>`}
+      </div>
+      <div id="att-late" class="grid grid-cols-1 sm:grid-cols-3 gap-3 ${type === "late" ? "" : "hidden"}">
+        ${field("att-date", "Date", "date", `value="${r && r.type === "late" ? r.date : todayIso()}"`)}
+        ${field("att-time", "Time in", "time", `value="${r ? esc(r.timeIn || "") : ""}"`)}
+        ${field("att-min", "Minutes late", "number", `min="1" max="600" value="${r && r.minutes ? r.minutes : ""}"`)}
+      </div>
+      <div>${lbl("att-remarks", 'Remarks <span class="font-normal text-slate-400">(optional)</span>')}
+        <textarea id="att-remarks" rows="3" maxlength="500" placeholder="e.g. With approved leave form · fever · heavy traffic" class="w-full ${inputCls} resize-y">${esc(r ? r.remarks : "")}</textarea></div>
+    </div>
+    ${modalFoot("att-save", r ? "Save changes" : "Save record", id || "")}`);
+}
+
+async function saveAttendance(id) {
+  const old = id ? state.attendance[id] : null;
+  const pid = val("att-pid");
+  const person = state.personnel[pid] || (old && old.pid === pid ? { name: old.name, type: old.ptype } : null);
+  if (!person) return toast("Choose a name.", "warn");
+  const type = (document.querySelector("input[name=att-type]:checked") || {}).value;
+  const base = { pid, name: person.name, ptype: person.type, type, remarks: val("att-remarks").slice(0, 500), by: state.user.email, updatedAt: serverTimestamp() };
+  let dates;
+  if (type === "absent") {
+    const from = val("att-from"), to = val("att-to") || from;
+    if (!isDay(from)) return toast("Pick the date of absence.", "warn");
+    if (!isDay(to) || to < from) return toast("The To date must be on or after the From date.", "warn");
+    if (from === to) dates = [from];
+    else {
+      dates = [];
+      for (let d = from; d <= to; d = addDays(d, 1)) { const wd = parseDay(d).getDay(); if (wd !== 0 && wd !== 6) dates.push(d); }
+      if (!dates.length) return toast("Those dates are all on a weekend.", "warn");
+      if (dates.length > 31) return toast("Record at most 31 school days at a time.", "warn");
+    }
+    const kind = val("att-kind");
+    if (!kind) return toast("Choose the kind of absence.", "warn");
+    Object.assign(base, { kind, duration: val("att-duration") || "whole", timeIn: "", minutes: 0 });
+  } else if (type === "late") {
+    const date = val("att-date");
+    if (!isDay(date)) return toast("Pick the date.", "warn");
+    const minutes = parseInt(val("att-min"), 10);
+    const timeIn = val("att-time");
+    if (!(minutes > 0) && !timeIn) return toast("Enter the time in or the minutes late.", "warn");
+    dates = [date];
+    Object.assign(base, { kind: "", duration: "", timeIn, minutes: minutes > 0 ? Math.min(minutes, 600) : 0 });
+  } else {
+    return toast("Choose Absent or Late.", "warn");
+  }
+  try {
+    if (id) {
+      await updateDoc(doc(db, "attendance", id), { ...base, date: dates[0] });
+    } else {
+      const b = writeBatch(db);
+      dates.forEach((d) => b.set(doc(collection(db, "attendance")), { ...base, date: d, createdAt: serverTimestamp() }));
+      await b.commit();
+    }
+    closeModal();
+    toast(id ? "Record updated" : `Saved: ${person.name} · ${type === "absent" ? `absent ${dates.length > 1 ? `${dates.length} days` : fmtDay(dates[0])}` : "late"}`);
+    // Show the month the record went into.
+    const m = dates[0].slice(0, 7);
+    if (m !== state.mon.month) { state.mon.month = m; watchAttendance(); render(); }
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- AOR: cleanest classroom per week (School Clinic) -----
+function aorRanking(weeks) {
+  const m = {};
+  for (const w of weeks) {
+    PLACES.forEach(([k, , , pts], i) => {
+      const room = String(w[k] || "").trim();
+      if (!room) return;
+      const r = (m[room.toLowerCase()] ||= { room, counts: [0, 0, 0], points: 0 });
+      r.counts[i]++;
+      r.points += pts;
+    });
+  }
+  return Object.values(m).sort((a, b) => b.points - a.points || b.counts[0] - a.counts[0] || a.room.localeCompare(b.room));
+}
+
+function monAor() {
+  const weeks = Object.values(state.aor).filter((w) => isDay(w.week)).sort((a, b) => b.week.localeCompare(a.week));
+  const now = mondayOf(todayIso());
+  const cur = state.aor[now];
+  const rank = aorRanking(weeks).slice(0, 10);
+  const place = (w, k, medal) => (w[k] ? `<span class="font-semibold text-slate-900">${medal} ${esc(w[k])}</span>` : `<span class="text-slate-400">—</span>`);
+  return `
+    <div class="rounded-2xl border ${cur ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"} p-4 mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <div class="text-[11px] font-bold uppercase tracking-wider ${cur ? "text-emerald-800" : "text-amber-800"}">This week · ${fmtWeek(now)}</div>
+        <div class="text-sm font-semibold text-slate-900 mt-0.5">${cur ? PLACES.map(([k, , medal]) => (cur[k] ? `${medal} ${esc(cur[k])}` : "")).filter(Boolean).join(" &nbsp;·&nbsp; ") : "Not rated yet."}</div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button data-act="aor-edit" data-id="${now}" class="${btnDark}"><i data-lucide="${cur ? "pencil" : "trophy"}" class="w-4 h-4"></i>${cur ? "Edit this week" : "Rate this week"}</button>
+        <button data-act="aor-edit" data-id="${addDays(now, -7)}" class="${btnLight}"><i data-lucide="calendar" class="w-4 h-4"></i>Other week</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div class="xl:col-span-2 min-w-0">${panel(panelHead("Cleanest classroom per week") + (weeks.length
+        ? table(["Week", "1st", "2nd", "3rd", ""], weeks.map((w) => `<tr>
+            <td class="px-4 py-3 text-xs font-semibold text-slate-700"><div class="whitespace-nowrap">${fmtWeek(w.week)}</div>${w.remarks ? `<div class="font-normal text-slate-500 max-w-[220px] mt-0.5">${esc(w.remarks)}</div>` : ""}</td>
+            ${PLACES.map(([k, , medal]) => `<td class="px-4 py-3">${place(w, k, medal)}</td>`).join("")}
+            <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("aor-edit", w.week, "pencil", "Edit")}${delBtn("aor", w.week)}</td>
+          </tr>`))
+        : empty("No weeks rated yet.")))}</div>
+      <div class="min-w-0">${panel(panelHead("Overall standing", `<span class="text-[11px] text-slate-500">1st = 3 pts · 2nd = 2 · 3rd = 1</span>`) + (rank.length
+        ? table(["Classroom", "🥇", "🥈", "🥉", "Pts"], rank.map((r) => `<tr>
+            <td class="px-4 py-2.5 font-semibold text-slate-900">${esc(r.room)}</td>
+            ${r.counts.map((c) => `<td class="px-4 py-2.5 tabular text-xs text-slate-600">${c || "—"}</td>`).join("")}
+            <td class="px-4 py-2.5 tabular text-sm font-extrabold text-brand-900">${r.points}</td>
+          </tr>`))
+        : empty("The standing appears once a week is rated.")))}</div>
+    </div>`;
+}
+
+function openAor(week) {
+  const w = isDay(week) ? mondayOf(week) : mondayOf(todayIso());
+  const r = state.aor[w] || {};
+  const rooms = [...new Set(Object.values(state.aor).flatMap((x) => PLACES.map(([k]) => x[k]).filter(Boolean)))].sort();
+  openModal(`${modalHead("AOR · Cleanest classroom", "School Clinic · rate the top 3 classrooms of the week")}
+    <div class="p-6 space-y-3">
+      <div>${lbl("aor-week", "Any day of the week")}
+        <input id="aor-week" type="date" data-act="aor-week" value="${w}" class="w-full ${inputCls}">
+        <p id="aor-week-label" class="text-xs font-semibold text-brand-900 mt-1">Week of ${fmtWeek(w)}</p></div>
+      ${PLACES.map(([k, text, medal]) => `<div>${lbl(`aor-${k}`, `${medal} ${text} place${k === "first" ? "" : ' <span class="font-normal text-slate-400">(optional)</span>'}`)}
+        <input id="aor-${k}" list="aor-rooms" maxlength="80" value="${esc(r[k] || "")}" placeholder="e.g. Grade 7 - Rizal" class="w-full ${inputCls}"></div>`).join("")}
+      <datalist id="aor-rooms">${rooms.map((x) => `<option value="${esc(x)}"></option>`).join("")}</datalist>
+      <div>${lbl("aor-remarks", 'Remarks <span class="font-normal text-slate-400">(optional)</span>')}
+        <textarea id="aor-remarks" rows="2" maxlength="300" class="w-full ${inputCls} resize-y">${esc(r.remarks || "")}</textarea></div>
+    </div>
+    ${modalFoot("aor-save", "Save ratings")}`);
+}
+
+function aorWeekChanged(value) {
+  if (!isDay(value)) return;
+  const w = mondayOf(value);
+  $("#aor-week-label").textContent = `Week of ${fmtWeek(w)}`;
+  const r = state.aor[w];
+  if (!r) return; // keep whatever was typed
+  PLACES.forEach(([k]) => { $(`#aor-${k}`).value = r[k] || ""; });
+  $("#aor-remarks").value = r.remarks || "";
+}
+
+async function saveAor() {
+  const day = val("aor-week");
+  if (!isDay(day)) return toast("Pick the week.", "warn");
+  const week = mondayOf(day);
+  const [first, second, third] = PLACES.map(([k]) => val(`aor-${k}`).replace(/\s+/g, " ").slice(0, 80));
+  if (!first) return toast("Enter the 1st place classroom.", "warn");
+  if (third && !second) return toast("Fill in 2nd place before 3rd.", "warn");
+  const named = [first, second, third].filter(Boolean).map((x) => x.toLowerCase());
+  if (new Set(named).size !== named.length) return toast("A classroom can only take one place per week.", "warn");
+  try {
+    await setDoc(doc(db, "aor", week), { week, first, second, third, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp() });
+    closeModal();
+    toast(`Saved: week of ${fmtWeek(week)}`);
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Daily Lesson Log (Head / Master Teachers, per subject area) -----
+const dllTeachers = (s) => Object.values(state.personnel).filter((x) => x.type === "teaching" && x.subject === s).sort(byName);
+function dllCurrent(pid) {
+  const old = state.dll[`${state.mon.week}_${pid}`] || {};
+  const d = state.dllDrafts[pid] || {};
+  return { status: d.status !== undefined ? d.status : old.status || "", remarks: d.remarks !== undefined ? d.remarks : old.remarks || "", old };
+}
+function dllChanges() {
+  return Object.keys(state.dllDrafts).filter((pid) => {
+    const c = dllCurrent(pid);
+    return c.status !== (c.old.status || "") || c.remarks.trim() !== (c.old.remarks || "");
+  });
+}
+function dllDiscardOk() {
+  return !dllChanges().length || confirm("You have unsaved Daily Lesson Log changes. Discard them?");
+}
+function setDllWeek(w) {
+  if (!isDay(w) || w === state.mon.week) return render();
+  if (!dllDiscardOk()) return render();
+  state.mon.week = w;
+  watchDll();
+  render();
+}
+
+function monDll() {
+  const subs = state.perms.subjects;
+  if (!subs.length) return panel(empty("No subject areas are assigned to you yet. Ask an admin to add them under Staff access."));
+  if (!subs.includes(state.mon.subject)) state.mon.subject = subs[0];
+  const s = state.mon.subject, w = state.mon.week;
+  const teachers = dllTeachers(s);
+  const changed = new Set(dllChanges());
+  const count = (k) => teachers.filter((t) => dllCurrent(t.id).status === k).length;
+  const seg = (t, c) => Object.entries(DLL_STATUS).map(([k, st]) => `<label class="cursor-pointer">
+      <input type="radio" class="sr-only" name="dll-${t.id}" value="${k}" data-act="dll-status" data-pid="${esc(t.id)}" ${c.status === k ? "checked" : ""}>
+      <span class="inline-block px-2.5 py-1 rounded-full text-[11px] font-bold border transition ${c.status === k ? st.cls : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}">${st.label}</span></label>`).join("");
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      ${selectBox("dll-subject", "dll-subject", subs.map((x) => [x, x]), s)}
+      <div class="inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
+        <button data-act="dll-week" data-step="-7" title="Previous week" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+        <span class="px-2 text-xs font-bold text-slate-700 whitespace-nowrap tabular">Week of ${fmtWeek(w)}</span>
+        <button data-act="dll-week" data-step="7" title="Next week" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+      </div>
+      <input id="dll-week-pick" type="date" data-act="dll-week-pick" value="${w}" title="Jump to a week" class="${inputCls}">
+      ${w !== mondayOf(todayIso()) ? `<button data-act="dll-today" class="${btnLight}">This week</button>` : ""}
+      <span class="flex-1"></span>
+      ${teachers.length ? `<button data-act="dll-all-ontime" class="${btnLight}"><i data-lucide="check-check" class="w-4 h-4"></i>Mark unchecked as on time</button>
+      <button data-act="dll-save" ${changed.size ? "" : "disabled"} class="${btnDark} ${changed.size ? "" : "opacity-40 cursor-not-allowed"}"><i data-lucide="save" class="w-4 h-4"></i>Save${changed.size ? ` (${changed.size})` : ""}</button>` : ""}
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      ${statTile("On time", count("ontime"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
+      ${statTile("Late", count("late"), "bg-amber-50 text-amber-900 border-amber-300")}
+      ${statTile("Not submitted", count("missing"), "bg-red-50 text-red-900 border-red-200")}
+      ${statTile("Not checked yet", count(""), "bg-slate-100 text-slate-800 border-slate-300")}
+    </div>
+    ${panel(panelHead(`${esc(s)} teachers · ${teachers.length}`) + (teachers.length
+      ? table(["Teacher", "DLL this week", "Remarks"], teachers.map((t) => {
+          const c = dllCurrent(t.id);
+          return `<tr class="${changed.has(t.id) ? "bg-amber-50/70" : ""}">
+            <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.position) || "Teacher"}</div></td>
+            <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5">${seg(t, c)}</div></td>
+            <td class="px-4 py-3"><input id="dll-r-${esc(t.id)}" data-act="dll-remarks" data-pid="${esc(t.id)}" value="${esc(c.remarks)}" maxlength="300" placeholder="Remarks (optional)" class="w-full min-w-[180px] text-xs px-2.5 py-2 rounded-md border border-slate-300 focus:ring-1 focus:ring-blue-500"></td>
+          </tr>`;
+        }))
+      : empty(`No ${esc(s)} teachers on the list yet. Add them under <strong>Personnel</strong> with subject area ${esc(s)}.`)))}`;
+}
+
+function markAllOnTime() {
+  let n = 0;
+  for (const t of dllTeachers(state.mon.subject)) {
+    if (!dllCurrent(t.id).status) { (state.dllDrafts[t.id] ||= {}).status = "ontime"; n++; }
+  }
+  if (!n) return toast("Every teacher already has a status.", "warn");
+  render();
+  toast(`${n} marked on time. Click Save to keep it.`);
+}
+
+async function saveDll() {
+  const s = state.mon.subject, w = state.mon.week;
+  const pids = dllChanges();
+  if (!pids.length) return toast("Nothing to save.", "warn");
+  const b = writeBatch(db);
+  let n = 0;
+  for (const pid of pids) {
+    const t = state.personnel[pid];
+    if (!t) continue;
+    const c = dllCurrent(pid);
+    if (!c.status) return toast(`Pick a status for ${t.name} first.`, "warn");
+    b.set(doc(db, "dll", `${w}_${pid}`), { week: w, pid, name: t.name, subject: s, status: c.status, remarks: c.remarks.trim().slice(0, 300), by: state.user.email, updatedAt: serverTimestamp() });
+    n++;
+  }
+  try {
+    await b.commit();
+    state.dllDrafts = {};
+    render();
+    toast(`Saved ${n} DLL record${n === 1 ? "" : "s"}`);
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Personnel list (HR; Head / Master Teachers see the teachers in their subject areas) -----
+const canEditPerson = (x) => state.perms.hr || (x.type === "teaching" && state.perms.subjects.includes(x.subject));
+
+function monPersonnel() {
+  const p = state.perms, f = state.mon;
+  const all = Object.values(state.personnel).filter(canEditPerson);
+  const list = all
+    .filter((x) => !f.ptype || x.type === f.ptype)
+    .filter((x) => !f.q || `${x.name} ${x.position || ""} ${x.subject || ""}`.toLowerCase().includes(f.q.toLowerCase()))
+    .sort(byName);
+  const n = (t) => all.filter((x) => x.type === t).length;
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <input id="mon-q" data-act="mon-q" value="${esc(f.q)}" placeholder="Search name, position or subject" class="${inputCls} flex-1 min-w-[180px]">
+      ${p.hr ? selectBox("mon-ptype", "mon-ptype", [["", "All personnel"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], f.ptype) : ""}
+      <button data-act="person-new" class="${btnDark}"><i data-lucide="user-plus" class="w-4 h-4"></i>Add personnel</button>
+    </div>
+    ${p.hr ? `<div class="grid grid-cols-2 gap-3 mb-5 max-w-md">
+        ${statTile("Teaching", n("teaching"), "bg-blue-50 text-blue-900 border-blue-200")}
+        ${statTile("Non-teaching", n("nonteaching"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
+      </div>`
+      : `<p class="text-xs text-slate-500 mb-3">Showing teachers in your subject areas: <strong class="text-slate-700">${esc(p.subjects.join(", "))}</strong>.</p>`}
+    ${panel(panelHead("Personnel list", `<span class="text-[11px] text-slate-500">Used by Attendance and the Daily Lesson Log</span>`) + (list.length
+      ? table(["Name", "Type", "Subject area", "Position", ""], list.map((x) => `<tr>
+          <td class="px-4 py-3 font-semibold text-slate-900">${esc(x.name)}</td>
+          <td class="px-4 py-3 text-xs">${chip(PTYPE[x.type] || "—", x.type === "teaching" ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-emerald-50 text-emerald-800 border-emerald-200")}</td>
+          <td class="px-4 py-3 text-xs text-slate-700">${esc(x.subject) || "—"}</td>
+          <td class="px-4 py-3 text-xs text-slate-600">${esc(x.position) || "—"}</td>
+          <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("person-edit", x.id, "pencil", "Edit")}${p.hr ? delBtn("personnel", x.id) : ""}</td>
+        </tr>`))
+      : empty(all.length ? "No one matches." : "No personnel yet. Click <strong>Add personnel</strong>. You can paste many names at once.")))}`;
+}
+
+function openPerson(id) {
+  const x = id ? state.personnel[id] : null;
+  const hr = state.perms.hr;
+  const type = x ? x.type : "teaching";
+  const subs = hr ? SUBJECTS : state.perms.subjects;
+  const subjectOpts = (hr ? [["", "— None —"]] : []).concat(subs.map((s) => [s, s]));
+  const defSubject = x ? x.subject : (subs.includes(state.mon.subject) ? state.mon.subject : hr ? "" : subs[0]);
+  openModal(`${modalHead(x ? "Edit personnel" : "Add personnel", hr ? "Teaching and non-teaching personnel" : "Teachers in your subject areas")}
+    <div class="p-6 space-y-3">
+      ${x ? field("person-name", "Full name", "text", `value="${esc(x.name)}" maxlength="120"`)
+        : `<div>${lbl("person-names", 'Full names <span class="font-normal text-slate-400">(one per line to add many at once)</span>')}
+            <textarea id="person-names" rows="6" placeholder="Juan Dela Cruz&#10;Maria Santos&#10;Jose Rizal" class="w-full ${inputCls} resize-y"></textarea></div>`}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        ${hr ? `<div>${lbl("person-type", "Type")}${selectBox("person-type", "person-type", [["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], type, "w-full")}</div>` : ""}
+        <div id="person-subject-wrap" class="${type === "teaching" ? "" : "hidden"}">${lbl("person-subject", "Subject area")}${selectBox("person-subject", "", subjectOpts, defSubject, "w-full")}</div>
+      </div>
+      ${field("person-position", 'Position <span class="font-normal text-slate-400">(optional)</span>', "text", `value="${esc(x ? x.position : "")}" maxlength="120" placeholder="e.g. Teacher III · Administrative Officer II"`)}
+      ${x ? "" : `<p class="text-[11px] text-slate-500">Everyone added together gets the same type, subject area and position. Names already on the list are skipped.</p>`}
+    </div>
+    ${modalFoot("person-save", x ? "Save changes" : "Add", id || "")}`);
+}
+
+async function savePerson(id) {
+  const hr = state.perms.hr;
+  const type = hr ? val("person-type") : "teaching";
+  const subject = type === "teaching" ? val("person-subject") : "";
+  const position = val("person-position").slice(0, 120);
+  if (!hr && !state.perms.subjects.includes(subject)) return toast("Pick one of your subject areas.", "warn");
+  const stamp = { by: state.user.email, updatedAt: serverTimestamp() };
+  try {
+    if (id) {
+      const name = val("person-name").replace(/\s+/g, " ");
+      if (!name) return toast("Enter the name.", "warn");
+      await updateDoc(doc(db, "personnel", id), { name: name.slice(0, 120), type, subject, position, ...stamp });
+      toast("Saved");
+    } else {
+      const names = [...new Set(val("person-names").split("\n").map((s) => s.trim().replace(/\s+/g, " ").slice(0, 120)).filter(Boolean))];
+      if (!names.length) return toast("Enter at least one name.", "warn");
+      if (names.length > 300) return toast("Add at most 300 names at a time.", "warn");
+      const have = new Set(Object.values(state.personnel).map((x) => String(x.name).toLowerCase()));
+      const fresh = names.filter((n) => !have.has(n.toLowerCase()));
+      if (!fresh.length) return toast("Everyone is already on the list.", "warn");
+      const b = writeBatch(db);
+      fresh.forEach((n) => b.set(doc(collection(db, "personnel")), { name: n, type, subject, position, createdAt: serverTimestamp(), ...stamp }));
+      await b.commit();
+      const skipped = names.length - fresh.length;
+      toast(`Added ${fresh.length}${skipped ? ` · ${skipped} already on the list` : ""}`);
+    }
+    closeModal();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Staff access (admins) -----
+function monAccess() {
+  const list = Object.values(state.monitors).sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+  return `
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <p class="text-sm text-slate-600 max-w-2xl">Choose who can open Monitoring. Staff create an account on this site with the <strong>same email</strong>, then sign out and in again. Admins already have full access.</p>
+      <button data-act="access-new" class="${btnDark}"><i data-lucide="user-plus" class="w-4 h-4"></i>Add staff</button>
+    </div>
+    ${panel(panelHead("Staff with Monitoring access") + (list.length
+      ? table(["Name", "Access", "Subject areas", ""], list.map((m) => `<tr>
+          <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(m.name) || "—"}</div><div class="text-xs text-slate-500">${esc(m.id)}</div></td>
+          <td class="px-4 py-3"><div class="flex flex-wrap gap-1">${PERM_LABELS.filter(([k]) => m[k]).map(([, t]) => chip(t, "bg-brand-50 text-brand-900 border-brand-200")).join("")}</div></td>
+          <td class="px-4 py-3 text-xs text-slate-600">${m.dll && (m.subjects || []).length ? esc(m.subjects.join(", ")) : "—"}</td>
+          <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("access-edit", m.id, "pencil", "Edit")}${delBtn("monitors", m.id)}</td>
+        </tr>`))
+      : empty("No staff yet. Add the HR personnel, the School Clinic and the Head / Master Teachers.")))}`;
+}
+
+function openAccess(id) {
+  const m = id ? state.monitors[id] : null;
+  const check = (value, text, hint) => `<label class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer">
+    <input type="checkbox" name="access-role" value="${value}" ${m && m[value] ? "checked" : ""} class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-800">
+    <span><span class="block text-sm font-bold text-slate-900">${text}</span><span class="block text-xs text-slate-500">${hint}</span></span></label>`;
+  openModal(`${modalHead(m ? "Edit staff access" : "Add staff access", "Monitoring")}
+    <div class="p-6 space-y-3">
+      ${field("access-email", "Email", "email", `value="${esc(m ? m.id : "")}" ${m ? "disabled" : ""} placeholder="name@deped.gov.ph"`)}
+      ${field("access-name", "Name", "text", `value="${esc(m ? m.name : "")}" maxlength="120"`)}
+      <div class="space-y-2">
+        ${check("hr", "Human Resource", "Attendance of teaching and non-teaching personnel")}
+        ${check("clinic", "School Clinic", "AOR · cleanest classroom per week")}
+        ${check("dll", "Head Teacher / Master Teacher", "Daily Lesson Log for the subject areas below")}
+      </div>
+      <div><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas <span class="font-normal text-slate-400">(Head / Master Teacher only)</span></div>
+        <div class="grid grid-cols-2 gap-1.5">${SUBJECTS.map((s) => `<label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+          <input type="checkbox" name="access-subject" value="${esc(s)}" ${m && (m.subjects || []).includes(s) ? "checked" : ""} class="w-4 h-4 rounded border-slate-300 text-brand-800">${esc(s)}</label>`).join("")}</div></div>
+    </div>
+    ${modalFoot("access-save", "Save access", id || "")}`);
+}
+
+async function saveAccess(id) {
+  const email = (id || val("access-email")).toLowerCase();
+  if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) return toast("Enter a valid email.", "warn");
+  const on = (v) => !!document.querySelector(`input[name=access-role][value=${v}]:checked`);
+  const subjects = [...document.querySelectorAll("input[name=access-subject]:checked")].map((i) => i.value);
+  const data = { name: val("access-name").slice(0, 120), hr: on("hr"), clinic: on("clinic"), dll: on("dll"), subjects: [], by: state.user.email, updatedAt: serverTimestamp() };
+  if (!data.hr && !data.clinic && !data.dll) return toast("Tick at least one kind of access.", "warn");
+  if (data.dll) {
+    if (!subjects.length) return toast("Pick the subject areas this Head / Master Teacher monitors.", "warn");
+    data.subjects = subjects;
+  }
+  try {
+    await setDoc(doc(db, "monitors", email), data);
+    closeModal();
+    toast(`Access saved for ${data.name || email}`);
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Delete (any Monitoring record) -----
+const DEL_TEXT = {
+  attendance: "this attendance record",
+  aor: "this week's cleanest classroom ratings",
+  personnel: "this person from the list. Their attendance and DLL records stay",
+  monitors: "this staff member's Monitoring access"
+};
+function confirmMonDelete(col, id) {
+  if (!DEL_TEXT[col]) return;
+  openModal(`<div class="p-6 space-y-3">
+    <div class="w-11 h-11 rounded-full bg-red-100 text-red-600 flex items-center justify-center"><i data-lucide="trash-2" class="w-5 h-5"></i></div>
+    <h3 class="text-lg font-bold text-slate-900">Delete?</h3>
+    <p class="text-sm text-slate-600">This removes ${DEL_TEXT[col]}. It can't be undone.</p>
+  </div>
+  <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+    <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+    <button data-act="mon-del-yes" data-col="${col}" data-id="${esc(id)}" class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow">Delete</button>
+  </div>`);
+}
+async function doMonDelete(col, id) {
+  if (!DEL_TEXT[col]) return;
+  try {
+    await deleteDoc(doc(db, col, id));
+    closeModal();
+    toast("Deleted");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ---------- Reports page ----------
+function renderReports() {
+  const p = state.perms, r = state.rep;
+  const range = (k) => `<div class="grid grid-cols-2 gap-2">
+      <div>${lbl(`rep-${k}-0`, "From")}<input id="rep-${k}-0" type="date" data-act="rep-date" data-k="${k}" data-i="0" value="${r[k][0]}" class="w-full ${inputCls}"></div>
+      <div>${lbl(`rep-${k}-1`, "To")}<input id="rep-${k}-1" type="date" data-act="rep-date" data-k="${k}" data-i="1" value="${r[k][1]}" class="w-full ${inputCls}"></div>
+    </div>
+    <div class="flex flex-wrap gap-1.5">${[["week", "This week"], ["month", "This month"], ["lastmonth", "Last month"], ["sy", "School year"]].map(([id, t]) =>
+      `<button data-act="rep-preset" data-k="${k}" data-p="${id}" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600">${t}</button>`).join("")}</div>`;
+  const card = (kind, icon, color, title, text, inner) => `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col gap-3">
+      <div class="flex items-start gap-3">
+        <div class="w-10 h-10 rounded-xl ${color} flex items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+        <div><h3 class="text-base font-bold text-slate-900">${title}</h3><p class="text-xs text-slate-500">${text}</p></div>
+      </div>
+      ${inner}
+      <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-2.5 rounded-lg bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950 text-sm font-bold shadow transition"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
+    </div>`;
+  const cards = [];
+  if (p.hr) cards.push(card("att", "calendar-x", "bg-red-50 text-red-700", "Attendance and Punctuality",
+    "Absences with kind and remarks, tardiness, a summary per person and the perfect attendance list.",
+    `${range("att")}<div>${lbl("rep-att-type", "Personnel")}${selectBox("rep-att-type", "rep-type", [["", "Teaching and non-teaching"], ["teaching", "Teaching only"], ["nonteaching", "Non-teaching only"]], r.attType, "w-full")}</div>`));
+  if (p.clinic) cards.push(card("aor", "sparkles", "bg-emerald-50 text-emerald-700", "AOR · Cleanest Classroom",
+    "1st, 2nd and 3rd place for each week, plus the overall standing.", range("aor")));
+  if (p.dll) cards.push(card("dll", "book-open-check", "bg-blue-50 text-blue-700", "Daily Lesson Log",
+    "DLL submissions per teacher and subject area: on time, late, not submitted.",
+    `${range("dll")}<div>${lbl("rep-dll-subject", "Subject area")}${selectBox("rep-dll-subject", "rep-subject",
+      p.subjects.length > 1 ? [["", "All my subject areas"], ...p.subjects.map((s) => [s, s])] : p.subjects.map((s) => [s, s]), r.dllSubject, "w-full")}</div>`));
+  main.innerHTML = `${pageHead("Reports", "printer", "Each report opens in a new tab. Print it or save it as PDF.")}
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">${cards.join("")}</div>`;
+}
+
+async function generateMonReport(kind) {
+  const [from, to] = state.rep[kind] || [];
+  if (!isDay(from) || !isDay(to) || to < from) return toast("Pick a valid From and To date.", "warn");
+  // Open the tab right away so pop-up blockers allow it, then fill it.
+  const w = window.open("", "_blank");
+  if (!w) return toast("Allow pop-ups for this site to open the report.", "warn");
+  w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Preparing report…</p>');
+  try {
+    const rows = async (col, field, a, b) => {
+      const snap = await getDocs(query(collection(db, col), where(field, ">=", a), where(field, "<=", b)));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    };
+    let html;
+    if (kind === "att") html = buildAttendanceReport(await rows("attendance", "date", from, to), from, to, state.rep.attType);
+    else if (kind === "aor") html = buildAorReport(from, to);
+    else {
+      const subs = state.rep.dllSubject && state.perms.subjects.includes(state.rep.dllSubject) ? [state.rep.dllSubject] : state.perms.subjects;
+      html = buildDllReport(await rows("dll", "week", mondayOf(from), to), from, to, subs);
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  } catch (e) {
+    w.close();
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Printable report pages -----
+const stat = (v, l) => `<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+const rptTable = (heads, rows) => (rows.length
+  ? `<table class="movs"><thead><tr>${heads.map((h) => `<th${h === "#" ? ' class="num"' : ""}>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
+  : `<div class="empty">None in this period.</div>`);
+
+function reportDoc({ title, subtitle, period, ref, sections, sigs }) {
+  const logo = new URL("logo.png", location.href).href;
+  const now = new Date().toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" });
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)} · ${esc(period)}</title>
+<link rel="icon" href="${logo}">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=Playfair+Display:ital,wght@0,700;1,600&display=swap" rel="stylesheet">
+<style>${REPORT_CSS}</style></head><body>
+<div class="toolbar"><span><b>${esc(title)}</b> · ${esc(period)}</span><button onclick="window.print()">Print / Save as PDF</button></div>
+<main class="page">
+  <header class="doc">
+    <img src="${logo}" alt="BLESS seal">
+    <div>
+      <div class="kicker">Republic of the Philippines · DepEd Region XI · SDO Panabo City</div>
+      <div class="school">San Vicente National High School</div>
+      <div class="kicker" style="letter-spacing:.06em">Monitoring Report</div>
+    </div>
+  </header>
+  <div class="title">${esc(title)}</div>
+  <div class="award">${esc(subtitle)}</div>
+  <div class="meta">
+    <span>Period: <b>${esc(period)}</b></span>
+    <span>Prepared by: <b>${esc(myName())}</b></span>
+    <span>Generated: <b>${now}</b></span>
+  </div>
+  ${sections.map(([h, body], i) => `<section><h2><span class="sn">${i + 1}</span>${h}</h2>${body}</section>`).join("\n  ")}
+  <div class="sigs" style="grid-template-columns:repeat(${sigs.length},1fr)">
+    ${sigs.map(([n, role]) => `<div class="sig"><div class="line">${n ? esc(n) : "&nbsp;"}</div><div class="role">${role}</div></div>`).join("")}
+  </div>
+  <footer class="doc"><span>BLESS PRAISE Portal · San Vicente National High School</span><span>${ref}</span></footer>
+</main>
+</body></html>`;
+}
+
+function buildAttendanceReport(recs, from, to, ptype) {
+  recs = recs.filter((r) => !ptype || r.ptype === ptype).sort((a, b) => a.date.localeCompare(b.date) || byName(a, b));
+  const sum = attendanceSummary(recs);
+  const abs = recs.filter((r) => r.type === "absent");
+  const late = recs.filter((r) => r.type === "late");
+  const days = sum.reduce((n, s) => n + s.days, 0);
+  const roster = Object.values(state.personnel).filter((x) => !ptype || x.type === ptype);
+  const withRecords = new Set(sum.map((s) => s.pid));
+  const perfect = roster.filter((x) => !withRecords.has(x.id)).sort(byName);
+  const day = (s) => fmtDay(s, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  return reportDoc({
+    title: "Attendance and Punctuality Report",
+    subtitle: ptype ? `${PTYPE[ptype]} personnel` : "Teaching and non-teaching personnel",
+    period: periodText(from, to),
+    ref: `ATT-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
+    sections: [
+      ["Summary", `<div class="stats">${stat(roster.length, "Personnel")}${stat(days, "Days absent")}${stat(late.length, "Times late")}${stat(perfect.length, "Perfect attendance")}</div>`],
+      ["Summary per Personnel", rptTable(["#", "Name", "Type", "Days absent", "Times late", "Minutes late"], sum.map((s, i) => `<tr>
+        <td class="num">${i + 1}</td><td><b>${esc(s.name)}</b></td><td>${PTYPE[s.ptype] || "—"}</td>
+        <td class="mark">${s.days || "—"}</td><td class="mark">${s.lates || "—"}</td><td class="mark">${s.minutes || "—"}</td></tr>`))],
+      ["Absences", rptTable(["#", "Date", "Name", "Kind of absence", "Duration", "Remarks"], abs.map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${day(r.date)}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.kind) || "—"}</td>
+        <td style="white-space:nowrap">${(DURATION[r.duration] || DURATION.whole)[0]}</td><td>${esc(r.remarks) || "—"}</td></tr>`))],
+      ["Tardiness", rptTable(["#", "Date", "Name", "Time in", "Minutes late", "Remarks"], late.map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${day(r.date)}</td><td><b>${esc(r.name)}</b></td>
+        <td style="white-space:nowrap">${fmtTime(r.timeIn) || "—"}</td><td class="mark">${r.minutes || "—"}</td><td>${esc(r.remarks) || "—"}</td></tr>`))],
+      ["Perfect Attendance", perfect.length
+        ? `<p class="lead">No absence or tardiness recorded in this period.</p><ol class="names">${perfect.map((x) => `<li>${esc(x.name)} <span class="muted">· ${PTYPE[x.type] || ""}</span></li>`).join("")}</ol>`
+        : `<div class="empty">None in this period.</div>`]
+    ],
+    sigs: [[myName(), "Prepared by · Human Resource"], ["", "Noted by · School Head"]]
+  });
+}
+
+function buildAorReport(from, to) {
+  const weeks = Object.values(state.aor).filter((w) => isDay(w.week) && w.week >= mondayOf(from) && w.week <= to).sort((a, b) => a.week.localeCompare(b.week));
+  const rank = aorRanking(weeks);
+  const top = rank[0];
+  return reportDoc({
+    title: "AOR · Cleanest Classroom Report",
+    subtitle: "Area of Responsibility · rated weekly by the School Clinic",
+    period: periodText(from, to),
+    ref: `AOR-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
+    sections: [
+      ["Summary", `<div class="stats">${stat(weeks.length, "Weeks rated")}${stat(rank.length, "Classrooms placed")}${stat(top ? top.counts[0] : 0, "Top room · 1st places")}${stat(top ? top.points : 0, "Top room · points")}</div>
+        ${top ? `<div class="best">Cleanest classroom of the period: <b>${esc(top.room)}</b> with ${top.points} points (${top.counts[0]}× 1st, ${top.counts[1]}× 2nd, ${top.counts[2]}× 3rd).</div>` : ""}`],
+      ["Weekly Results", rptTable(["#", "Week", "🥇 1st", "🥈 2nd", "🥉 3rd", "Remarks"], weeks.map((w, i) => `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${fmtWeek(w.week)}</td>
+        ${PLACES.map(([k]) => `<td>${w[k] ? `<b>${esc(w[k])}</b>` : "—"}</td>`).join("")}<td>${esc(w.remarks) || "—"}</td></tr>`))],
+      ["Overall Standing", `<p class="lead">Points: 1st = 3, 2nd = 2, 3rd = 1.</p>` + rptTable(["Rank", "Classroom", "1st", "2nd", "3rd", "Points"], rank.map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td><b>${esc(r.room)}</b></td>${r.counts.map((c) => `<td class="mark">${c || "—"}</td>`).join("")}<td class="mark"><b>${r.points}</b></td></tr>`))]
+    ],
+    sigs: [[myName(), "Prepared by · School Clinic"], ["", "Noted by · School Head"]]
+  });
+}
+
+function buildDllReport(recs, from, to, subjects) {
+  const weekList = [];
+  for (let w = mondayOf(from); w <= to; w = addDays(w, 7)) weekList.push(w);
+  recs = recs.filter((r) => subjects.includes(r.subject) && r.week >= mondayOf(from) && r.week <= to && DLL_STATUS[r.status]);
+  let teacherTotal = 0;
+  const perSubject = subjects.map((s) => {
+    const rows = recs.filter((r) => r.subject === s).sort((a, b) => a.week.localeCompare(b.week) || byName(a, b));
+    const people = new Map(dllTeachers(s).map((t) => [t.id, { name: t.name, ontime: 0, late: 0, missing: 0 }]));
+    for (const r of rows) {
+      if (!people.has(r.pid)) people.set(r.pid, { name: r.name, ontime: 0, late: 0, missing: 0 });
+      people.get(r.pid)[r.status]++;
+    }
+    const list = [...people.values()].sort(byName);
+    teacherTotal += list.length;
+    const issues = rows.filter((r) => r.status !== "ontime" || r.remarks);
+    const body = rptTable(["#", "Teacher", "On time", "Late", "Not submitted", "Weeks checked", "Submitted"], list.map((t, i) => {
+      const checked = t.ontime + t.late + t.missing;
+      return `<tr><td class="num">${i + 1}</td><td><b>${esc(t.name)}</b></td><td class="mark">${t.ontime || "—"}</td><td class="mark">${t.late || "—"}</td>
+        <td class="mark">${t.missing || "—"}</td><td class="mark">${checked} / ${weekList.length}</td><td class="mark">${checked ? Math.round(((t.ontime + t.late) / checked) * 100) + "%" : "—"}</td></tr>`;
+    })) + (issues.length ? `<p class="lead" style="margin-top:12px"><b>Late, not submitted, or with remarks</b></p>` + rptTable(["#", "Week", "Teacher", "Status", "Remarks"], issues.map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${fmtWeek(r.week)}</td><td><b>${esc(r.name)}</b></td><td>${DLL_STATUS[r.status].label}</td><td>${esc(r.remarks) || "—"}</td></tr>`)) : "");
+    return [esc(s), body];
+  });
+  return reportDoc({
+    title: "Daily Lesson Log Monitoring Report",
+    subtitle: subjects.length === 1 ? `Subject area: ${subjects[0]}` : `Subject areas: ${subjects.join(", ")}`,
+    period: periodText(from, to),
+    ref: `DLL-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
+    sections: [
+      ["Summary", `<div class="stats">${stat(subjects.length, "Subject areas")}${stat(teacherTotal, "Teachers")}${stat(weekList.length, "Weeks in period")}${stat(recs.length, "DLL checks")}</div>
+        <p class="lead">Submitted = (on time + late) ÷ weeks checked.</p>`],
+      ...perSubject
+    ],
+    sigs: [[myName(), "Prepared by · Head Teacher / Master Teacher"], ["", "Noted by · School Head"]]
+  });
+}
+
 // ----- Guidelines (both roles) -----
 function renderGuide() {
   const step = (n, title, text, cls) => `<div class="rounded-xl border p-4 ${cls}"><div class="tabular text-xs font-extrabold opacity-70">STEP ${n}</div><div class="text-sm font-bold mt-0.5">${title}</div><div class="text-xs mt-0.5 opacity-80">${text}</div></div>`;
@@ -1135,6 +2026,30 @@ document.addEventListener("click", async (e) => {
       break;
     }
     case "save-decision": saveDecision(); break;
+    // Monitoring
+    case "mon-view":
+      if (state.mon.view === "dll" && !dllDiscardOk()) break;
+      if (state.mon.view === "dll") state.dllDrafts = {};
+      state.mon.view = el.dataset.view; render(); break;
+    case "att-new": openAttendance(); break;
+    case "att-edit": openAttendance(el.dataset.id); break;
+    case "att-save": saveAttendance(el.dataset.id); break;
+    case "aor-edit": openAor(el.dataset.id); break;
+    case "aor-save": saveAor(); break;
+    case "dll-week": setDllWeek(addDays(state.mon.week, Number(el.dataset.step))); break;
+    case "dll-today": setDllWeek(mondayOf(todayIso())); break;
+    case "dll-all-ontime": markAllOnTime(); break;
+    case "dll-save": saveDll(); break;
+    case "person-new": openPerson(); break;
+    case "person-edit": openPerson(el.dataset.id); break;
+    case "person-save": savePerson(el.dataset.id); break;
+    case "access-new": openAccess(); break;
+    case "access-edit": openAccess(el.dataset.id); break;
+    case "access-save": saveAccess(el.dataset.id); break;
+    case "mon-del": confirmMonDelete(el.dataset.col, el.dataset.id); break;
+    case "mon-del-yes": doMonDelete(el.dataset.col, el.dataset.id); break;
+    case "rep-preset": state.rep[el.dataset.k] = PRESETS[el.dataset.p](); render(); break;
+    case "rep-gen": generateMonReport(el.dataset.kind); break;
   }
 });
 
@@ -1151,6 +2066,23 @@ document.addEventListener("change", (e) => {
     case "verify": setVerified({ [el.dataset.key]: el.checked }); break;
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
+    // Monitoring
+    case "mon-month": if (el.value) { state.mon.month = el.value; watchAttendance(); } render(); break;
+    case "mon-ptype": state.mon.ptype = el.value; render(); break;
+    case "att-type":
+      $("#att-absent").classList.toggle("hidden", el.value !== "absent");
+      $("#att-late").classList.toggle("hidden", el.value !== "late");
+      break;
+    case "aor-week": aorWeekChanged(el.value); break;
+    case "person-type": $("#person-subject-wrap").classList.toggle("hidden", el.value !== "teaching"); break;
+    case "dll-subject":
+      if (dllDiscardOk()) { state.mon.subject = el.value; state.dllDrafts = {}; }
+      render(); break;
+    case "dll-week-pick": if (isDay(el.value)) setDllWeek(mondayOf(el.value)); break;
+    case "dll-status": (state.dllDrafts[el.dataset.pid] ||= {}).status = el.value; render(); break;
+    case "rep-date": state.rep[el.dataset.k][Number(el.dataset.i)] = el.value; break;
+    case "rep-type": state.rep.attType = el.value; break;
+    case "rep-subject": state.rep.dllSubject = el.value; break;
   }
 });
 
@@ -1159,6 +2091,8 @@ document.addEventListener("input", (e) => {
   if (el.dataset.act === "remarks") (state.drafts[state.selected] ||= {}).remarks = el.value;
   if (el.dataset.act === "link") { state.linkDrafts[el.dataset.key] = el.value; render(); }
   if (el.dataset.act === "filter" && el.tagName === "INPUT") { state.filter.q = el.value; render(); }
+  if (el.dataset.act === "mon-q") { state.mon.q = el.value; render(); }
+  if (el.dataset.act === "dll-remarks") { (state.dllDrafts[el.dataset.pid] ||= {}).remarks = el.value; render(); }
 });
 
 document.addEventListener("submit", (e) => {

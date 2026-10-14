@@ -64,6 +64,24 @@ Firebase → **Authentication → Settings → Authorized domains → Add domain
 - Pick a **decision** (Complete / Incomplete / For compliance / Qualified / Disqualified), add remarks, **Save decision**.
   *Complete, Qualified* and *Disqualified* lock the teacher's checklist.
 
+## Monitoring and Reports
+The **Monitoring** and **Reports** tabs appear only for admins and for staff an admin has given access.
+
+| Who | Monitoring | Reports |
+|---|---|---|
+| **Human Resource (HR)** | **Attendance**: record absences (date or date range, kind of absence, whole/half day, remarks) and tardiness (time in, minutes late, remarks) for teaching and non-teaching personnel. **Personnel** list. | Attendance and Punctuality |
+| **School Clinic** | **AOR**: rate the cleanest classroom each week (1st, 2nd, 3rd) with an overall standing. | AOR · Cleanest Classroom |
+| **Head / Master Teachers** | **Daily Lesson Log**: each week, mark every teacher in their subject areas *On time*, *Late* or *Not submitted*, with remarks. | Daily Lesson Log |
+| **Admins** | Everything above, plus **Staff access**. | All three |
+
+**Giving access:** an admin opens **Monitoring → Staff access → Add staff**, enters the person's email, and ticks HR, School Clinic and/or
+Head / Master Teacher (with their subject areas). The person creates an account on the site with that same email, then signs in.
+
+**Personnel list:** HR adds names under **Monitoring → Personnel** (paste many names at once, one per line). Give each teacher a
+**subject area**: the Daily Lesson Log lists teachers by subject area. Head / Master Teachers can also add teachers in their own subjects.
+
+Subject areas and kinds of absence are listed in `data.js`. If you change the subject areas, also change `subjects()` in `firestore.rules` and publish the rules.
+
 ## Changing MOVs
 Edit the lists in `data.js` and upload it again. Items are matched by position, so add new items **at the end** of a list
 to keep existing ticks lined up. If you add a new award, also add its key to `awardKeys()` in `firestore.rules` and publish the rules.

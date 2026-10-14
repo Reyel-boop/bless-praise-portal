@@ -236,3 +236,20 @@ export const AWARD_GROUPS = [
   { name: "Non-Teaching Personnel", color: "emerald", keys: ["cat-nonteach-1","cat-nonteach-2","cat-nonteach-3","cat-nonteach-4"] },
   { name: "Special Recognitions", color: "amber", keys: ["cat-special-1","cat-special-2"] }
 ];
+
+// Subject areas for Daily Lesson Log monitoring (Monitoring → Daily Lesson Log).
+// If you change these, also update subjects() in firestore.rules and publish the rules.
+export const SUBJECTS = ["English", "Math", "Science", "Filipino", "Araling Panlipunan", "TLE", "Values Education", "MAPEH"];
+
+// Kinds of absence HR picks from when recording an absence (Monitoring → Attendance).
+export const ABSENCE_KINDS = [
+  "Sick leave",
+  "Vacation leave",
+  "Special privilege leave",
+  "Forced / mandatory leave",
+  "Maternity / paternity leave",
+  "Official business / official time",
+  "Emergency / personal",
+  "Absent without approved leave",
+  "Other (see remarks)"
+];
