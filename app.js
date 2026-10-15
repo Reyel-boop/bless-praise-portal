@@ -9,7 +9,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig, driveApiKey } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
-import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES } from "./data.js";
+import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS } from "./data.js";
 
 // ---------- Helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -138,7 +138,7 @@ const state = {
   user: null, role: null, profile: null,
   app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
   apps: {}, reviews: {}, selected: null, drafts: {},
-  filter: { q: "", award: "", status: "" },
+  filter: { q: "", award: "", status: "", checker: "" },
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
@@ -841,6 +841,7 @@ function renderAwardee() {
         ${bar("Verified", p.ver, p.total, GREEN)}
         ${submitBox()}
       </div>
+      ${review && review.assignee ? `<div class="rounded-[10px] border border-black/10 bg-brand-50 px-4 py-3 text-sm text-slate-700 flex items-center gap-2"><i data-lucide="user-check" class="w-4 h-4 text-depedGold-500"></i>Your documents are checked by <strong class="text-brand-950">${esc(review.assignee)}</strong>.</div>` : ""}
       ${review && review.remarks ? `<div class="rounded-[10px] border border-amber-300 bg-amber-50 p-4">
         <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5"><i data-lucide="message-square" class="w-3.5 h-3.5"></i>Committee remarks</div>
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
@@ -898,6 +899,20 @@ async function doSubmit() {
 }
 
 // ----- Admin: applicants list -----
+// Admin staff in charge of checking an application's documents. Saved on the review so the teacher can see it.
+const checkerOf = (id) => ((state.reviews[id] || {}).assignee || "");
+const checkerSelect = (id, cls = "") => `<select data-act="assign" data-uid="${esc(id)}" title="Admin staff checking the documents" class="${inputCls} !py-1.5 text-xs ${cls}">
+    <option value="">Unassigned</option>${CHECKERS.map((n) => `<option ${checkerOf(id) === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+async function assignChecker(id, name) {
+  if (name && !CHECKERS.includes(name)) return;
+  try {
+    await setDoc(doc(db, "reviews", id), { assignee: name, updatedAt: serverTimestamp(), ...demoMark() }, { merge: true });
+    toast(name ? `Assigned to ${name}` : "Unassigned");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
 function renderAdmin() {
   const all = Object.values(state.apps).map((app) => {
     const review = state.reviews[app.id];
@@ -907,6 +922,7 @@ function renderAdmin() {
   const rows = all
     .filter((r) => !f.award || r.app.award === f.award)
     .filter((r) => !f.status || r.st === f.status)
+    .filter((r) => !f.checker || (f.checker === "-" ? !checkerOf(r.app.id) : checkerOf(r.app.id) === f.checker))
     .filter((r) => !f.q || (r.app.name + " " + r.app.dept).toLowerCase().includes(f.q.toLowerCase()))
     .sort((x, y) => (x.st === "submitted" ? 0 : 1) - (y.st === "submitted" ? 0 : 1) || String(x.app.name).localeCompare(String(y.app.name)));
 
@@ -930,6 +946,10 @@ function renderAdmin() {
           <option value="">All statuses</option>
           ${Object.entries(STATUS).map(([k, s]) => `<option value="${k}" ${f.status === k ? "selected" : ""}>${s.label}</option>`).join("")}
         </select>
+        <select id="f-checker" data-act="filter" data-f="checker" class="w-full sm:w-auto min-w-0 max-w-full text-sm py-2 rounded-lg border-slate-300">
+          <option value="">All checkers</option><option value="-" ${f.checker === "-" ? "selected" : ""}>Unassigned</option>
+          ${CHECKERS.map((n) => `<option ${f.checker === n ? "selected" : ""}>${esc(n)}</option>`).join("")}
+        </select>
       </div>
       ${rows.length ? `<div class="overflow-x-auto"><table class="w-full text-sm">
         <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>
@@ -938,6 +958,7 @@ function renderAdmin() {
           <th class="text-left font-bold px-4 py-2.5">Links</th>
           <th class="text-left font-bold px-4 py-2.5">Verified</th>
           <th class="text-left font-bold px-4 py-2.5">Status</th>
+          <th class="text-left font-bold px-4 py-2.5">Checked by</th>
           <th class="text-right font-bold px-4 py-2.5">Actions</th>
         </tr></thead>
         <tbody class="divide-y divide-black/10">
@@ -947,6 +968,7 @@ function renderAdmin() {
             <td class="px-4 py-3 tabular text-xs font-bold text-blue-700">${p.sub}/${p.total}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-emerald-700">${p.ver}/${p.total}</td>
             <td class="px-4 py-3 whitespace-nowrap">${pill(st)}</td>
+            <td class="px-4 py-3">${checkerSelect(app.id, "min-w-[150px]")}</td>
             <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.id)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.id)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
           </tr>`).join("")}
         </tbody></table></div>`
@@ -998,6 +1020,7 @@ function renderReview() {
         <div class="text-sm text-slate-500">${esc(app.dept) || "—"}</div>
         <div class="mt-2 text-sm font-semibold text-brand-900">${esc(a.name)}${a.local ? ` <span class="font-serif italic font-normal text-depedGold-600">· ${esc(a.local)}</span>` : ""}</div>
         ${app.folder ? `<a href="${esc(app.folder)}" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-depedGold-500 hover:underline"><i data-lucide="folder-open" class="w-4 h-4"></i>Open MOV folder in Google Drive</a>` : ""}
+        <div class="mt-2 flex items-center gap-2 text-xs text-slate-600"><span class="font-semibold">Checked by</span>${checkerSelect(app.id)}</div>
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
@@ -2987,6 +3010,7 @@ document.addEventListener("change", (e) => {
     case "verify": setVerified({ [el.dataset.key]: el.checked }); break;
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
+    case "assign": assignChecker(el.dataset.uid, el.value); break;
     // Monitoring
     case "mon-month": setAttMonth(el.value); break;
     case "att-day-pick": setAttDay(el.value); break;

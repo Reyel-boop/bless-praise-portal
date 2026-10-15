@@ -254,6 +254,16 @@ export const ABSENCE_KINDS = [
   "Other (see remarks)"
 ];
 
+// Admin staff in charge of checking the documents (MOVs) of each application.
+export const CHECKERS = [
+  "Aubrey Anne Jalique",
+  "Angelica Enaga",
+  "Joseph Cañedo",
+  "Karen Demetillo",
+  "Lelibeth Cabarles",
+  "Jhon Reyel Jimenez"
+];
+
 // Positions people choose from when creating an account. The group decides teaching vs non-teaching.
 const levels = (title, n) => Array.from({ length: n }, (_, i) => `${title} ${["I", "II", "III", "IV", "V", "VI", "VII"][i]}`);
 export const POSITIONS = {
