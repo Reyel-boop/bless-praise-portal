@@ -237,7 +237,7 @@ export const AWARD_GROUPS = [
   { name: "Special Recognitions", color: "amber", keys: ["cat-special-1","cat-special-2"] }
 ];
 
-// Subject areas for Daily Lesson Log monitoring (Monitoring → Daily Lesson Log).
+// Subject areas for the weekly ILAW lesson plan check (Monitoring → ILAW · Lesson plan).
 // If you change these, also update subjects() in firestore.rules and publish the rules.
 export const SUBJECTS = ["English", "Math", "Science", "Filipino", "Araling Panlipunan", "TLE", "Values Education", "MAPEH"];
 

@@ -346,6 +346,7 @@ function field(id, label, type = "text", extra = "") {
 // Public demo logins shown on the sign-in page. Demo accounts only see demo records (firestore.rules);
 // the demo Admin login can see every application, so it is not listed.
 const DEMO_LOGINS = [
+  { role: "Head / Master Teacher", text: "Rose Aquino: weekly ILAW lesson plan check per subject area and teacher, and the ILAW report", email: "demo.headteacher@svnhs-demo.ph", password: "Demo-HeadTeacher-2026" },
   { role: "School Clinic", text: "Carmen Lopez: weekly AOR cleanest classroom ratings and the AOR report", email: "demo.clinic@svnhs-demo.ph", password: "Demo-Clinic-2026" },
   { role: "HR", text: "Maria Santos: attendance sheet, month view, personnel and the monthly attendance report", email: "demo.hr@svnhs-demo.ph", password: "Demo-HR-2026" },
   { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
@@ -402,7 +403,7 @@ function renderAuth() {
           <h2 class="mt-5 font-bold leading-[1.02] tracking-[-0.035em] text-white text-[clamp(2.6rem,6.4vw,5.6rem)]">
             <span class="ld-word" style="--i:0"><span>Excellence</span></span><br><span class="ld-word" style="--i:1"><span class="ld-grad">isn’t luck.</span></span>
           </h2>
-          <p class="ld-fade mt-5 max-w-[30rem] text-[#b3bccb] text-[clamp(0.98rem,1.4vw,1.12rem)] leading-relaxed" style="--d:.8s">Every MOV linked. Every award verified. Attendance, AOR and lesson logs monitored in one place.</p>
+          <p class="ld-fade mt-5 max-w-[30rem] text-[#b3bccb] text-[clamp(0.98rem,1.4vw,1.12rem)] leading-relaxed" style="--d:.8s">Every MOV linked. Every award verified. Attendance, AOR and ILAW lesson plans monitored in one place.</p>
         </div>
         <div class="ld-fade ld-auth lg:justify-self-end w-full max-w-none lg:max-w-[420px]" style="--d:.45s">
           <div class="rounded-[10px] border border-white/10 bg-[rgba(17,21,29,0.78)] backdrop-blur-xl shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8 max-h-[calc(100dvh-2rem)] overflow-y-auto">
@@ -446,7 +447,7 @@ async function handleAuthSubmit(form) {
       await setDoc(doc(db, "users", cred.user.uid), {
         name, position, dept, email: cred.user.email, createdAt: serverTimestamp()
       });
-      // Every account is on the personnel list (attendance, DLL).
+      // Every account is on the personnel list (attendance, ILAW).
       await savePersonnelEntry(cred.user, name, position, dept);
       // HR / Clinic / Head-Master Teacher: ask an admin for Monitoring access.
       if (role) await sendAccessRequest(cred.user.email, name, position, { hr: role === "hr", clinic: role === "clinic", dll: role === "dll", subjects: role === "dll" ? subjects : [] });
@@ -1325,11 +1326,11 @@ async function generateReport(uid) {
   w.document.close();
 }
 
-// ---------- Monitoring: Attendance · AOR · Daily Lesson Log ----------
+// ---------- Monitoring: Attendance · AOR · ILAW (lesson plan) ----------
 // Access comes from monitors/{email}, set by admins under Monitoring → Staff access.
 //   hr      Human Resource: attendance of teaching and non-teaching personnel, personnel list
 //   clinic  School Clinic: AOR, cleanest classroom per week (1st, 2nd, 3rd)
-//   dll     Head / Master Teachers: Daily Lesson Log, only for their own subject areas
+//   dll     Head / Master Teachers: weekly ILAW (lesson plan) check, only for their own subject areas (stored in "dll")
 // Admins have all of it, plus Staff access.
 const pad = (n) => String(n).padStart(2, "0");
 const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -1407,7 +1408,7 @@ function roleFields(prefix, m) {
   return `<div class="space-y-2">
       ${check("hr", "Human Resource", "Attendance of teaching and non-teaching personnel")}
       ${check("clinic", "School Clinic", "AOR · cleanest classroom per week")}
-      ${check("dll", "Head Teacher / Master Teacher", "Daily Lesson Log for the subject areas below")}
+      ${check("dll", "Head Teacher / Master Teacher", "Weekly ILAW (lesson plan) check for the subject areas below")}
     </div>
     <div><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas <span class="font-normal text-slate-400">(Head / Master Teacher only)</span></div>
       <div class="grid grid-cols-2 gap-1.5">${subjectChecks(`${prefix}-subject`, (m && m.subjects) || [])}</div></div>`;
@@ -1585,7 +1586,7 @@ function watchAttendance() {
 }
 function watchDll() {
   state.dllDrafts = {};
-  watch("dll", query(collection(db, "dll"), where("week", "==", state.mon.week)), (d) => { state.dll = d; });
+  watch("dll", query(collection(db, "dll"), ...demoOnly(where("week", "==", state.mon.week))), (d) => { state.dll = d; });
 }
 
 // ----- Shared bits -----
@@ -1616,7 +1617,7 @@ function monViews() {
   return [
     ["attendance", "Attendance", "calendar-x", p.hr],
     ["aor", "AOR · Cleanest classroom", "sparkles", p.clinic],
-    ["dll", "Daily Lesson Log", "book-open-check", p.dll],
+    ["dll", "ILAW · Lesson plan", "book-open-check", p.dll],
     ["personnel", "Personnel", "users", p.hr || p.dll],
     ["access", `Staff access${Object.keys(state.requests).length ? ` (${Object.keys(state.requests).length} new)` : ""}`, "shield-check", p.admin]
   ].filter((v) => v[3]);
@@ -1626,7 +1627,7 @@ function renderMonitor() {
   const views = monViews();
   if (!views.some((v) => v[0] === state.mon.view)) state.mon.view = views[0][0];
   const body = { attendance: monAttendance, aor: monAor, dll: monDll, personnel: monPersonnel, access: monAccess }[state.mon.view]();
-  main.innerHTML = `${pageHead("Monitoring", "clipboard-check", "Attendance, AOR (Area of Responsibility) and Daily Lesson Logs")}
+  main.innerHTML = `${pageHead("Monitoring", "clipboard-check", "Attendance, AOR (Area of Responsibility) and ILAW lesson plans")}
     <div class="flex flex-wrap gap-2 mb-5">
       ${views.map(([id, text, icon]) => `<button data-act="mon-view" data-view="${id}" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold border transition-colors ${state.mon.view === id ? "bg-brand-50 text-brand-950 border-black/20 shadow-sm" : "text-brand-600 border-transparent hover:bg-brand-100 hover:text-brand-950"}">
         <i data-lucide="${icon}" class="w-4 h-4"></i>${text}</button>`).join("")}
@@ -1993,12 +1994,26 @@ async function saveAttendance(id) {
   }
 }
 
-// ----- AOR: cleanest classroom per week (School Clinic) -----
-function aorRanking(weeks) {
+// ----- AOR: cleanest classroom per week, 1st–3rd per grade level (School Clinic) -----
+const GRADES = ["7", "8", "9", "10", "11", "12"];
+// A week's results by grade: { "7": { first, second, third }, … }. Older ratings had one top 3 for the
+// whole school; those rooms are sorted into grades by the "Grade N" in their name.
+function aorGrades(w) {
+  if (w && w.grades) return w.grades;
+  const out = {};
+  PLACES.forEach(([k]) => {
+    const room = String((w && w[k]) || "").trim();
+    const g = (room.match(/grade\s*(\d{1,2})/i) || [])[1];
+    if (room && GRADES.includes(g)) (out[g] ||= {})[k] = room;
+  });
+  return out;
+}
+function aorRanking(weeks, grade) {
   const m = {};
   for (const w of weeks) {
+    const res = aorGrades(w)[grade] || {};
     PLACES.forEach(([k, , , pts], i) => {
-      const room = String(w[k] || "").trim();
+      const room = String(res[k] || "").trim();
       if (!room) return;
       const r = (m[room.toLowerCase()] ||= { room, counts: [0, 0, 0], points: 0 });
       r.counts[i]++;
@@ -2007,56 +2022,72 @@ function aorRanking(weeks) {
   }
   return Object.values(m).sort((a, b) => b.points - a.points || b.counts[0] - a.counts[0] || a.room.localeCompare(b.room));
 }
+const ratedGrades = (w) => GRADES.filter((g) => (aorGrades(w)[g] || {}).first);
 
 function monAor() {
-  const weeks = Object.values(state.aor).filter((w) => isDay(w.week)).sort((a, b) => b.week.localeCompare(a.week));
   const now = mondayOf(todayIso());
-  const cur = state.aor[now];
-  const rank = aorRanking(weeks).slice(0, 10);
-  const place = (w, k, medal) => (w[k] ? `<span class="font-semibold text-slate-900">${medal} ${esc(w[k])}</span>` : `<span class="text-slate-400">—</span>`);
-  return `
-    <div class="rounded-[10px] border ${cur ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"} p-4 mb-5 flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <div class="text-[11px] font-bold uppercase tracking-wider ${cur ? "text-emerald-800" : "text-amber-800"}">This week · ${fmtWeek(now)}</div>
-        <div class="text-sm font-semibold text-slate-900 mt-0.5">${cur ? PLACES.map(([k, , medal]) => (cur[k] ? `${medal} ${esc(cur[k])}` : "")).filter(Boolean).join(" &nbsp;·&nbsp; ") : "Not rated yet."}</div>
-      </div>
-      <div class="flex flex-wrap gap-2">
-        <button data-act="aor-edit" data-id="${now}" class="${btnDark}"><i data-lucide="${cur ? "pencil" : "trophy"}" class="w-4 h-4"></i>${cur ? "Edit this week" : "Rate this week"}</button>
-        <button data-act="aor-edit" data-id="${addDays(now, -7)}" class="${btnLight}"><i data-lucide="calendar" class="w-4 h-4"></i>Other week</button>
-      </div>
-    </div>
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <div class="xl:col-span-2 min-w-0">${panel(panelHead("Cleanest classroom per week") + (weeks.length
-        ? table(["Week", "1st", "2nd", "3rd", ""], weeks.map((w) => `<tr>
-            <td class="px-4 py-3 text-xs font-semibold text-slate-700"><div class="whitespace-nowrap">${fmtWeek(w.week)}</div>${w.remarks ? `<div class="font-normal text-slate-500 max-w-[220px] mt-0.5">${esc(w.remarks)}</div>` : ""}</td>
-            ${PLACES.map(([k, , medal]) => `<td class="px-4 py-3">${place(w, k, medal)}</td>`).join("")}
-            <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("aor-edit", w.week, "pencil", "Edit")}${delBtn("aor", w.week)}</td>
-          </tr>`))
-        : empty("No weeks rated yet.")))}</div>
-      <div class="min-w-0">${panel(panelHead("Overall standing", `<span class="text-[11px] text-slate-500">1st = 3 pts · 2nd = 2 · 3rd = 1</span>`) + (rank.length
-        ? table(["Classroom", "🥇", "🥈", "🥉", "Pts"], rank.map((r) => `<tr>
-            <td class="px-4 py-2.5 font-semibold text-slate-900">${esc(r.room)}</td>
-            ${r.counts.map((c) => `<td class="px-4 py-2.5 tabular text-xs text-slate-600">${c || "—"}</td>`).join("")}
-            <td class="px-4 py-2.5 tabular text-sm font-extrabold text-brand-900">${r.points}</td>
-          </tr>`))
-        : empty("The standing appears once a week is rated.")))}</div>
+  const wk = state.mon.aorWeek || now;
+  const g0 = state.mon.aorGrade || "7";
+  const weeks = Object.values(state.aor).filter((w) => isDay(w.week)).sort((a, b) => b.week.localeCompare(a.week));
+  const cur = state.aor[wk];
+  const res = aorGrades(cur);
+  const done = cur ? ratedGrades(cur).length : 0;
+  const rank = aorRanking(weeks, g0).slice(0, 10);
+  const card = (g) => {
+    const r = res[g] || {};
+    return `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-4">
+      <div class="flex items-center justify-between"><h4 class="font-bold text-brand-950">Grade ${g}</h4>${r.first ? "" : `<span class="text-[11px] text-slate-400">Not rated</span>`}</div>
+      <ol class="mt-2 space-y-1.5 text-sm">${PLACES.map(([k, text, medal]) => `<li class="flex items-center gap-2"><span>${medal}</span>
+        ${r[k] ? `<span class="font-semibold text-slate-900 truncate">${esc(r[k])}</span>` : `<span class="text-slate-400">${text} —</span>`}</li>`).join("")}</ol>
     </div>`;
+  };
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <div class="inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
+        <button data-act="aor-wk" data-step="-7" title="Previous week" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+        <span class="px-2 text-xs font-bold text-slate-700 whitespace-nowrap tabular">Week of ${fmtWeek(wk)}</span>
+        <button data-act="aor-wk" data-step="7" title="Next week" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+      </div>
+      ${wk !== now ? `<button data-act="aor-wk-now" class="${btnLight}">This week</button>` : ""}
+      <span class="text-sm ${done === GRADES.length ? "text-emerald-700 font-semibold" : "text-slate-500"}">${done} of ${GRADES.length} grade levels rated</span>
+      <div class="flex-1"></div>
+      <button data-act="aor-edit" data-id="${wk}" class="${btnDark}"><i data-lucide="${cur ? "pencil" : "trophy"}" class="w-4 h-4"></i>${cur ? "Edit this week" : "Rate this week"}</button>
+      ${cur ? delBtn("aor", wk) : ""}
+    </div>
+    ${cur && cur.remarks ? `<p class="text-sm text-slate-600 mb-3"><strong>Remarks:</strong> ${esc(cur.remarks)}</p>` : ""}
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 mb-6">${GRADES.map(card).join("")}</div>
+    ${panel(panelHead("Overall standing", `<span class="text-[11px] text-slate-500">All rated weeks · 1st = 3 pts · 2nd = 2 · 3rd = 1</span>`) + `
+      <div class="px-5 pb-3 flex flex-wrap gap-1.5">${GRADES.map((g) => `<button data-act="aor-grade" data-g="${g}" class="px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${g === g0 ? "bg-depedGold-500 text-white border-depedGold-500" : "border-black/10 text-brand-600 hover:bg-brand-100"}">Grade ${g}</button>`).join("")}</div>` + (rank.length
+      ? table(["Rank", "Classroom", "🥇", "🥈", "🥉", "Pts"], rank.map((r, i) => `<tr>
+          <td class="px-4 py-2.5 tabular text-xs font-bold text-slate-500">${i + 1}</td>
+          <td class="px-4 py-2.5 font-semibold text-slate-900">${esc(r.room)}</td>
+          ${r.counts.map((c) => `<td class="px-4 py-2.5 tabular text-xs text-slate-600">${c || "—"}</td>`).join("")}
+          <td class="px-4 py-2.5 tabular text-sm font-extrabold text-brand-900">${r.points}</td>
+        </tr>`))
+      : empty(`No Grade ${g0} classroom placed yet.`)))}`;
 }
 
 function openAor(week) {
   const w = isDay(week) ? mondayOf(week) : mondayOf(todayIso());
-  const r = state.aor[w] || {};
-  const rooms = [...new Set(Object.values(state.aor).flatMap((x) => PLACES.map(([k]) => x[k]).filter(Boolean)))].sort();
-  openModal(`${modalHead("AOR · Cleanest classroom", "School Clinic · rate the top 3 classrooms of the week")}
-    <div class="p-6 space-y-3">
+  const res = aorGrades(state.aor[w]);
+  const all = Object.values(state.aor);
+  const roomsOf = (g) => [...new Set(all.flatMap((x) => PLACES.map(([k]) => (aorGrades(x)[g] || {})[k]).filter(Boolean)))].sort();
+  openModal(`${modalHead("AOR · Cleanest classroom", "School Clinic · top 3 classrooms per grade level this week")}
+    <div class="p-6 space-y-4">
       <div>${lbl("aor-week", "Any day of the week")}
         <input id="aor-week" type="date" data-act="aor-week" value="${w}" class="w-full ${inputCls}">
         <p id="aor-week-label" class="text-xs font-semibold text-brand-900 mt-1">Week of ${fmtWeek(w)}</p></div>
-      ${PLACES.map(([k, text, medal]) => `<div>${lbl(`aor-${k}`, `${medal} ${text} place${k === "first" ? "" : ' <span class="font-normal text-slate-400">(optional)</span>'}`)}
-        <input id="aor-${k}" list="aor-rooms" maxlength="80" value="${esc(r[k] || "")}" placeholder="e.g. Grade 7 - Rizal" class="w-full ${inputCls}"></div>`).join("")}
-      <datalist id="aor-rooms">${rooms.map((x) => `<option value="${esc(x)}"></option>`).join("")}</datalist>
+      <p class="text-xs text-slate-500">Fill in the grade levels you rated. 2nd and 3rd place are optional.</p>
+      ${GRADES.map((g) => `<fieldset class="rounded-lg border border-black/10 p-3">
+        <legend class="px-1 text-sm font-bold text-brand-950">Grade ${g}</legend>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          ${PLACES.map(([k, text, medal]) => `<div><label for="aor-${g}-${k}" class="block text-[11px] font-semibold text-slate-600 mb-0.5">${medal} ${text}</label>
+            <input id="aor-${g}-${k}" list="aor-rooms-${g}" maxlength="80" value="${esc((res[g] || {})[k] || "")}" placeholder="Grade ${g} – section" class="w-full ${inputCls}"></div>`).join("")}
+        </div>
+        <datalist id="aor-rooms-${g}">${roomsOf(g).map((x) => `<option value="${esc(x)}"></option>`).join("")}</datalist>
+      </fieldset>`).join("")}
       <div>${lbl("aor-remarks", 'Remarks <span class="font-normal text-slate-400">(optional)</span>')}
-        <textarea id="aor-remarks" rows="2" maxlength="300" class="w-full ${inputCls} resize-y">${esc(r.remarks || "")}</textarea></div>
+        <textarea id="aor-remarks" rows="2" maxlength="300" class="w-full ${inputCls} resize-y">${esc((state.aor[w] || {}).remarks || "")}</textarea></div>
     </div>
     ${modalFoot("aor-save", "Save ratings")}`);
 }
@@ -2067,7 +2098,8 @@ function aorWeekChanged(value) {
   $("#aor-week-label").textContent = `Week of ${fmtWeek(w)}`;
   const r = state.aor[w];
   if (!r) return; // keep whatever was typed
-  PLACES.forEach(([k]) => { $(`#aor-${k}`).value = r[k] || ""; });
+  const res = aorGrades(r);
+  GRADES.forEach((g) => PLACES.forEach(([k]) => { $(`#aor-${g}-${k}`).value = (res[g] || {})[k] || ""; }));
   $("#aor-remarks").value = r.remarks || "";
 }
 
@@ -2075,21 +2107,28 @@ async function saveAor() {
   const day = val("aor-week");
   if (!isDay(day)) return toast("Pick the week.", "warn");
   const week = mondayOf(day);
-  const [first, second, third] = PLACES.map(([k]) => val(`aor-${k}`).replace(/\s+/g, " ").slice(0, 80));
-  if (!first) return toast("Enter the 1st place classroom.", "warn");
-  if (third && !second) return toast("Fill in 2nd place before 3rd.", "warn");
-  const named = [first, second, third].filter(Boolean).map((x) => x.toLowerCase());
-  if (new Set(named).size !== named.length) return toast("A classroom can only take one place per week.", "warn");
+  const grades = {};
+  for (const g of GRADES) {
+    const [first, second, third] = PLACES.map(([k]) => val(`aor-${g}-${k}`).replace(/\s+/g, " ").slice(0, 80));
+    if (!first && !second && !third) continue;
+    if (!first) return toast(`Grade ${g}: enter the 1st place classroom.`, "warn");
+    if (third && !second) return toast(`Grade ${g}: fill in 2nd place before 3rd.`, "warn");
+    const named = [first, second, third].filter(Boolean).map((x) => x.toLowerCase());
+    if (new Set(named).size !== named.length) return toast(`Grade ${g}: a classroom can only take one place.`, "warn");
+    grades[g] = { first, second, third };
+  }
+  if (!Object.keys(grades).length) return toast("Enter the 1st place classroom for at least one grade level.", "warn");
   try {
-    await setDoc(doc(db, "aor", aorDocId(week)), { week, first, second, third, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp(), ...demoMark() });
+    await setDoc(doc(db, "aor", aorDocId(week)), { week, grades, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp(), ...demoMark() });
+    state.mon.aorWeek = week;
     closeModal();
-    toast(`Saved: week of ${fmtWeek(week)}`);
+    toast(`Saved: week of ${fmtWeek(week)} · ${Object.keys(grades).length} grade level${Object.keys(grades).length === 1 ? "" : "s"}`);
   } catch (e) {
     toast(errorText(e), "error");
   }
 }
 
-// ----- Daily Lesson Log (Head / Master Teachers, per subject area) -----
+// ----- ILAW lesson plan, weekly (Head / Master Teachers, per subject area, per teacher) -----
 const dllTeachers = (s) => Object.values(state.personnel).filter((x) => x.type === "teaching" && x.subject === s).sort(byName);
 function dllCurrent(pid) {
   const old = state.dll[`${state.mon.week}_${pid}`] || {};
@@ -2103,7 +2142,7 @@ function dllChanges() {
   });
 }
 function dllDiscardOk() {
-  return !dllChanges().length || confirm("You have unsaved Daily Lesson Log changes. Discard them?");
+  return !dllChanges().length || confirm("You have unsaved ILAW changes. Discard them?");
 }
 function setDllWeek(w) {
   if (!isDay(w) || w === state.mon.week) return render();
@@ -2145,7 +2184,7 @@ function monDll() {
       ${statTile("Not checked yet", count(""), "bg-slate-100 text-slate-800 border-slate-300")}
     </div>
     ${panel(panelHead(`${esc(s)} teachers · ${teachers.length}`) + (teachers.length
-      ? table(["Teacher", "DLL this week", "Remarks"], teachers.map((t) => {
+      ? table(["Teacher", "ILAW this week", "Remarks"], teachers.map((t) => {
           const c = dllCurrent(t.id);
           return `<tr class="${changed.has(t.id) ? "bg-amber-50/70" : ""}">
             <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.position) || "Teacher"}</div></td>
@@ -2177,14 +2216,14 @@ async function saveDll() {
     if (!t) continue;
     const c = dllCurrent(pid);
     if (!c.status) return toast(`Pick a status for ${t.name} first.`, "warn");
-    b.set(doc(db, "dll", `${w}_${pid}`), { week: w, pid, name: t.name, subject: s, status: c.status, remarks: c.remarks.trim().slice(0, 300), by: state.user.email, updatedAt: serverTimestamp() });
+    b.set(doc(db, "dll", `${w}_${pid}`), { week: w, pid, name: t.name, subject: s, status: c.status, remarks: c.remarks.trim().slice(0, 300), by: state.user.email, updatedAt: serverTimestamp(), ...demoMark() });
     n++;
   }
   try {
     await b.commit();
     state.dllDrafts = {};
     render();
-    toast(`Saved ${n} DLL record${n === 1 ? "" : "s"}`);
+    toast(`Saved ${n} ILAW record${n === 1 ? "" : "s"}`);
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -2214,7 +2253,7 @@ function monPersonnel() {
         ${statTile("Teaching", n("teaching"), "bg-blue-50 text-blue-900 border-blue-200")}
         ${statTile("Non-teaching", n("nonteaching"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
       </div>` : ""}
-    ${panel(panelHead("Personnel list", `<span class="text-[11px] text-slate-500">Used by Attendance and the Daily Lesson Log</span>`) + (list.length
+    ${panel(panelHead("Personnel list", `<span class="text-[11px] text-slate-500">Used by Attendance and the ILAW lesson plan check</span>`) + (list.length
       ? table(["Name", "Type", "Position", "Subject area / Office", ""], list.map((x) => `<tr>
           <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(x.name)}</div>${x.email ? `<div class="text-xs text-slate-500">${esc(x.email)}</div>` : ""}</td>
           <td class="px-4 py-3 text-xs">${chip(PTYPE[x.type] || "—", x.type === "teaching" ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-emerald-50 text-emerald-800 border-emerald-200")}</td>
@@ -2326,7 +2365,7 @@ async function saveAccess(id) {
 const DEL_TEXT = {
   attendance: "this attendance record",
   aor: "this week's cleanest classroom ratings",
-  personnel: "this person from the list. Their attendance and DLL records stay. If they still have an account, they're asked for their position again the next time they sign in",
+  personnel: "this person from the list. Their attendance and ILAW records stay. If they still have an account, they're asked for their position again the next time they sign in",
   monitors: "this staff member's Monitoring access",
   accessRequests: "this access request. They stay a regular user and can ask again"
 };
@@ -2376,9 +2415,9 @@ function renderReports() {
     `<div>${lbl("rep-att-month", "Month")}<input id="rep-att-month" type="month" data-act="rep-month" value="${r.att[0].slice(0, 7)}" class="w-full ${inputCls}"></div>
     <div>${lbl("rep-att-type", "Personnel")}${selectBox("rep-att-type", "rep-type", [["", "Teaching and non-teaching"], ["teaching", "Teaching only"], ["nonteaching", "Non-teaching only"]], r.attType, "w-full")}</div>`));
   if (p.clinic) cards.push(card("aor", "sparkles", "bg-emerald-50 text-emerald-700", "AOR · Cleanest Classroom",
-    "1st, 2nd and 3rd place for each week, plus the overall standing.", range("aor")));
-  if (p.dll) cards.push(card("dll", "book-open-check", "bg-blue-50 text-blue-700", "Daily Lesson Log",
-    "DLL submissions per teacher and subject area: on time, late, not submitted.",
+    "1st, 2nd and 3rd place per grade level (7–12) each week, plus the standing per grade.", range("aor")));
+  if (p.dll) cards.push(card("dll", "book-open-check", "bg-blue-50 text-blue-700", "ILAW · Lesson Plan",
+    "Weekly ILAW submissions per subject area and per teacher: on time, late, not submitted.",
     `${range("dll")}<div>${lbl("rep-dll-subject", "Subject area")}${selectBox("rep-dll-subject", "rep-subject",
       p.subjects.length > 1 ? [["", "All my subject areas"], ...p.subjects.map((s) => [s, s])] : p.subjects.map((s) => [s, s]), r.dllSubject, "w-full")}</div>`));
   main.innerHTML = `${pageHead("Reports", "printer", "Each report opens in a new tab. Print it or save it as PDF.")}
@@ -2394,7 +2433,7 @@ async function generateMonReport(kind) {
   w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Preparing report…</p>');
   try {
     const rows = async (col, field, a, b) => {
-      const snap = await getDocs(query(collection(db, col), ...(col === "attendance" ? demoOnly(where(field, ">=", a), where(field, "<=", b)) : [where(field, ">=", a), where(field, "<=", b)])));
+      const snap = await getDocs(query(collection(db, col), ...(col === "attendance" || col === "dll" ? demoOnly(where(field, ">=", a), where(field, "<=", b)) : [where(field, ">=", a), where(field, "<=", b)])));
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     };
     let html;
@@ -2509,21 +2548,24 @@ function buildAttendanceReport(recs, from, to, ptype) {
 
 function buildAorReport(from, to) {
   const weeks = Object.values(state.aor).filter((w) => isDay(w.week) && w.week >= mondayOf(from) && w.week <= to).sort((a, b) => a.week.localeCompare(b.week));
-  const rank = aorRanking(weeks);
-  const top = rank[0];
+  const tops = GRADES.map((g) => [g, aorRanking(weeks, g)[0]]).filter(([, t]) => t);
+  const gradeSection = (g) => {
+    const rank = aorRanking(weeks, g);
+    const rows = weeks.filter((w) => (aorGrades(w)[g] || {}).first);
+    return [`Grade ${g}`, rptTable(["#", "Week", "🥇 1st", "🥈 2nd", "🥉 3rd"], rows.map((w, i) => { const r = aorGrades(w)[g]; return `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${fmtWeek(w.week)}</td>${PLACES.map(([k]) => `<td>${r[k] ? `<b>${esc(r[k])}</b>` : "—"}</td>`).join("")}</tr>`; }))
+      + (rank.length ? `<p class="lead" style="margin-top:10px">Standing for Grade ${g} (1st = 3, 2nd = 2, 3rd = 1):</p>` + rptTable(["Rank", "Classroom", "1st", "2nd", "3rd", "Points"], rank.map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td><b>${esc(r.room)}</b></td>${r.counts.map((c) => `<td class="mark">${c || "—"}</td>`).join("")}<td class="mark"><b>${r.points}</b></td></tr>`)) : "")];
+  };
   return reportDoc({
     title: "AOR · Cleanest Classroom Report",
-    subtitle: "Area of Responsibility · rated weekly by the School Clinic",
+    subtitle: "Area of Responsibility · top 3 per grade level, rated weekly by the School Clinic",
     period: periodText(from, to),
     ref: `AOR-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
     sections: [
-      ["Summary", `<div class="stats">${stat(weeks.length, "Weeks rated")}${stat(rank.length, "Classrooms placed")}${stat(top ? top.counts[0] : 0, "Top room · 1st places")}${stat(top ? top.points : 0, "Top room · points")}</div>
-        ${top ? `<div class="best">Cleanest classroom of the period: <b>${esc(top.room)}</b> with ${top.points} points (${top.counts[0]}× 1st, ${top.counts[1]}× 2nd, ${top.counts[2]}× 3rd).</div>` : ""}`],
-      ["Weekly Results", rptTable(["#", "Week", "🥇 1st", "🥈 2nd", "🥉 3rd", "Remarks"], weeks.map((w, i) => `<tr>
-        <td class="num">${i + 1}</td><td style="white-space:nowrap">${fmtWeek(w.week)}</td>
-        ${PLACES.map(([k]) => `<td>${w[k] ? `<b>${esc(w[k])}</b>` : "—"}</td>`).join("")}<td>${esc(w.remarks) || "—"}</td></tr>`))],
-      ["Overall Standing", `<p class="lead">Points: 1st = 3, 2nd = 2, 3rd = 1.</p>` + rptTable(["Rank", "Classroom", "1st", "2nd", "3rd", "Points"], rank.map((r, i) => `<tr>
-        <td class="num">${i + 1}</td><td><b>${esc(r.room)}</b></td>${r.counts.map((c) => `<td class="mark">${c || "—"}</td>`).join("")}<td class="mark"><b>${r.points}</b></td></tr>`))]
+      ["Summary", `<div class="stats">${stat(weeks.length, "Weeks rated")}${stat(tops.length, "Grade levels with results")}${stat(weeks.reduce((n, w) => n + ratedGrades(w).length, 0), "Grade ratings")}</div>
+        ${tops.length ? `<div class="best">Cleanest classroom per grade level: ${tops.map(([g, t]) => `<b>Grade ${g}</b>: ${esc(t.room)} (${t.points} pts)`).join(" · ")}</div>` : ""}`],
+      ...GRADES.map(gradeSection)
     ],
     sigs: [[myName(), "Prepared by · School Clinic"], ["", "Noted by · School Head"]]
   });
@@ -2553,12 +2595,12 @@ function buildDllReport(recs, from, to, subjects) {
     return [esc(s), body];
   });
   return reportDoc({
-    title: "Daily Lesson Log Monitoring Report",
+    title: "ILAW (Lesson Plan) Monitoring Report",
     subtitle: subjects.length === 1 ? `Subject area: ${subjects[0]}` : `Subject areas: ${subjects.join(", ")}`,
     period: periodText(from, to),
-    ref: `DLL-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
+    ref: `ILAW-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
     sections: [
-      ["Summary", `<div class="stats">${stat(subjects.length, "Subject areas")}${stat(teacherTotal, "Teachers")}${stat(weekList.length, "Weeks in period")}${stat(recs.length, "DLL checks")}</div>
+      ["Summary", `<div class="stats">${stat(subjects.length, "Subject areas")}${stat(teacherTotal, "Teachers")}${stat(weekList.length, "Weeks in period")}${stat(recs.length, "ILAW checks")}</div>
         <p class="lead">Submitted = (on time + late) ÷ weeks checked.</p>`],
       ...perSubject
     ],
@@ -2665,6 +2707,9 @@ document.addEventListener("click", async (e) => {
     }
     case "save-decision": saveDecision(); break;
     // Monitoring
+    case "aor-wk": state.mon.aorWeek = addDays(state.mon.aorWeek || mondayOf(todayIso()), Number(el.dataset.step)); render(); break;
+    case "aor-wk-now": state.mon.aorWeek = mondayOf(todayIso()); render(); break;
+    case "aor-grade": state.mon.aorGrade = el.dataset.g; render(); break;
     case "mon-view":
       if (state.mon.view === "dll" && !dllDiscardOk()) break;
       if (state.mon.view === "dll") state.dllDrafts = {};

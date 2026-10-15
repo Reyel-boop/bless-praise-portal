@@ -13,8 +13,8 @@ rules_version = '2';
 //   accessRequests/{email} Someone asking for Monitoring access. Admins approve or decline it.
 //   personnel/{id}        Teaching and non-teaching personnel. One per account (ID = uid), made at sign-up; HR can edit.
 //   attendance/{id}       Absences and tardiness. HR only.
-//   aor/{week}            Cleanest classroom per week (week = Monday, YYYY-MM-DD; demo-<week> for demo accounts). School Clinic only.
-//   dll/{week}_{pid}      Daily Lesson Log check per teacher per week. Head/Master Teachers, own subjects.
+//   aor/{week}            Cleanest classroom per week, top 3 per grade level 7–12 (week = Monday; demo-<week> for demo accounts). School Clinic only.
+//   dll/{week}_{pid}      ILAW (lesson plan) check per teacher per week. Head/Master Teachers, own subjects.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -179,25 +179,28 @@ service cloud.firestore {
     match /aor/{id} {
       allow read, delete: if can('clinic') && demoOk(resource.data);
       allow create, update: if can('clinic') && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
-        && request.resource.data.keys().hasOnly(['week', 'first', 'second', 'third', 'remarks', 'by', 'demo', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['week', 'grades', 'first', 'second', 'third', 'remarks', 'by', 'demo', 'updatedAt'])
         && isDay(request.resource.data.week)
         && (id == request.resource.data.week
             || (request.resource.data.get('demo', false) == true && id == 'demo-' + request.resource.data.week))
-        && request.resource.data.first is string && request.resource.data.first.size() > 0 && request.resource.data.first.size() <= 80
-        && str(request.resource.data.second, 80) && str(request.resource.data.third, 80)
+        // Top 3 per grade level: grades = { "7": { first, second, third }, … "12": … }.
+        && request.resource.data.get('grades', {}) is map
+        && request.resource.data.get('grades', {}).keys().hasOnly(['7', '8', '9', '10', '11', '12'])
+        && str(request.resource.data.get('first', ''), 80) && str(request.resource.data.get('second', ''), 80) && str(request.resource.data.get('third', ''), 80)
         && str(request.resource.data.remarks, 300);
     }
 
     match /dll/{id} {
-      allow read: if can('dll');
+      allow read: if can('dll') && demoOk(resource.data);
       allow create, update: if mySubject(request.resource.data.subject)
-        && request.resource.data.keys().hasOnly(['week', 'pid', 'name', 'subject', 'status', 'remarks', 'by', 'updatedAt'])
+        && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
+        && request.resource.data.keys().hasOnly(['week', 'pid', 'name', 'subject', 'status', 'remarks', 'by', 'demo', 'updatedAt'])
         && isDay(request.resource.data.week)
         && id == request.resource.data.week + '_' + request.resource.data.pid
         && str(request.resource.data.name, 120)
         && request.resource.data.status in ['ontime', 'late', 'missing']
         && str(request.resource.data.remarks, 300);
-      allow delete: if mySubject(resource.data.subject);
+      allow delete: if mySubject(resource.data.subject) && demoOk(resource.data);
     }
   }
 }

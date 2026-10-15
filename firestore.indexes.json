@@ -13,6 +13,20 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "dll",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "demo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "week",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []
