@@ -157,7 +157,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['pid', 'name', 'ptype', 'type', 'date', 'kind', 'duration', 'timeIn', 'minutes', 'remarks', 'by', 'createdAt', 'updatedAt'])
         && request.resource.data.pid is string
         && str(request.resource.data.name, 120)
-        && request.resource.data.type in ['absent', 'late']
+        && request.resource.data.type in ['absent', 'late', 'uniform']
         && isDay(request.resource.data.date)
         && str(request.resource.data.kind, 80)
         && request.resource.data.duration in ['', 'whole', 'am', 'pm']

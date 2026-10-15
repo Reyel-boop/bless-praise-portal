@@ -1215,8 +1215,10 @@ const PRESETS = {
 function freshMon() {
   return { view: "", attMode: "daily", day: todayIso(), month: todayIso().slice(0, 7), week: mondayOf(todayIso()), subject: "", q: "", ptype: "" };
 }
+// Attendance reports are monthly: from the 1st to the last day of the month.
+const monthRange = (m) => { const [y, mo] = m.split("-").map(Number); return [`${m}-01`, `${m}-${pad(new Date(y, mo, 0).getDate())}`]; };
 function freshRep() {
-  return { att: PRESETS.month(), aor: PRESETS.month(), dll: PRESETS.month(), attType: "", dllSubject: "" };
+  return { att: monthRange(todayIso().slice(0, 7)), aor: PRESETS.month(), dll: PRESETS.month(), attType: "", dllSubject: "" };
 }
 
 function permsFrom(snap) {
@@ -1470,14 +1472,19 @@ function renderMonitor() {
 function attendanceSummary(recs) {
   const m = {};
   for (const r of recs) {
-    const s = (m[r.pid] ||= { pid: r.pid, name: r.name, ptype: r.ptype, days: 0, lates: 0, minutes: 0 });
+    const s = (m[r.pid] ||= { pid: r.pid, name: r.name, ptype: r.ptype, days: 0, lates: 0, minutes: 0, uniform: 0 });
     if (r.type === "absent") s.days += (DURATION[r.duration] || DURATION.whole)[1];
+    else if (r.type === "uniform") s.uniform++;
     else { s.lates++; s.minutes += Number(r.minutes) || 0; }
   }
   return Object.values(m).sort(byName);
 }
 
+// 75 → "1 h 15 min"
+const fmtMins = (m) => (!m ? "—" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`);
+
 function attRecord(r) {
+  if (r.type === "uniform") return chip("No proper uniform", "bg-violet-50 text-violet-800 border-violet-200");
   if (r.type === "absent") {
     const half = r.duration && r.duration !== "whole" ? ` · ${(DURATION[r.duration] || DURATION.whole)[0]}` : "";
     return `${chip("Absent", "bg-red-50 text-red-800 border-red-200")}<div class="text-xs text-slate-600 mt-1">${esc(r.kind || "—")}${half}</div>`;
@@ -1523,19 +1530,21 @@ function attDaily() {
   const recs = (pid) => recsOn(pid, d);
   const absent = people.filter((x) => recs(x.id).some((r) => r.type === "absent")).length;
   const late = people.filter((x) => recs(x.id).some((r) => r.type === "late")).length;
+  const noUniform = people.filter((x) => recs(x.id).some((r) => r.type === "uniform")).length;
   const present = people.filter((x) => !recs(x.id).some((r) => r.type === "absent" && r.duration === "whole")).length;
   const wd = parseDay(d).getDay();
   const markBtn = (x, mark, text, on, onCls) => `<button data-act="att-mark" data-pid="${esc(x.id)}" data-mark="${mark}"
     class="px-3 py-1.5 rounded-full text-xs font-bold border transition ${on ? onCls : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}">${text}</button>`;
   const rows = (pt) => people.filter((x) => x.type === pt).map((x) => {
     const rs = recs(x.id);
-    const isAbs = rs.some((r) => r.type === "absent"), isLate = rs.some((r) => r.type === "late");
+    const isAbs = rs.some((r) => r.type === "absent"), isLate = rs.some((r) => r.type === "late"), isUni = rs.some((r) => r.type === "uniform");
     return `<tr class="${isAbs ? "bg-red-50/50" : isLate ? "bg-amber-50/50" : ""}">
       <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(x.name)}</div><div class="text-xs text-slate-500">${esc(x.position) || PTYPE[x.type]}${x.subject ? ` · ${esc(x.subject)}` : ""}</div></td>
       <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5">
-        ${markBtn(x, "present", "Present", !rs.length, "bg-emerald-600 text-white border-emerald-700")}
+        ${markBtn(x, "present", "Present", !isAbs && !isLate, "bg-emerald-600 text-white border-emerald-700")}
         ${markBtn(x, "absent", "Absent", isAbs, "bg-red-600 text-white border-red-700")}
         ${markBtn(x, "late", "Late", isLate, "bg-amber-400 text-amber-950 border-amber-500")}
+        ${markBtn(x, "uniform", "No uniform", isUni, "bg-violet-600 text-white border-violet-700")}
       </div></td>
       <td class="px-4 py-3 text-xs">${rs.length ? rs.map((r) => `<div class="flex items-start justify-between gap-2">
           <div>${attRecord(r)}${r.remarks ? `<div class="text-slate-500 mt-0.5 whitespace-pre-line">${esc(r.remarks)}</div>` : ""}</div>
@@ -1562,9 +1571,9 @@ function attDaily() {
       ${statTile("Present", present, "bg-emerald-50 text-emerald-900 border-emerald-300")}
       ${statTile("Absent", absent, "bg-red-50 text-red-900 border-red-200")}
       ${statTile("Late", late, "bg-amber-50 text-amber-900 border-amber-300")}
-      ${statTile("Personnel", people.length, "bg-brand-900 text-white border-brand-950")}
+      ${statTile("No proper uniform", noUniform, "bg-violet-50 text-violet-900 border-violet-200")}
     </div>
-    <p class="text-xs text-slate-500 mb-3">Everyone is <strong class="text-emerald-700">Present</strong> unless tagged. Tap <strong class="text-red-700">Absent</strong> or <strong class="text-amber-700">Late</strong> to add the details.</p>
+    <p class="text-xs text-slate-500 mb-3">${people.length} personnel. Everyone is <strong class="text-emerald-700">Present</strong> unless tagged. Tap <strong class="text-red-700">Absent</strong>, <strong class="text-amber-700">Late</strong> or <strong class="text-violet-700">No uniform</strong> to add the details.</p>
     <div class="space-y-5">${section("teaching")}${section("nonteaching")}${people.length ? "" : panel(empty("No one matches."))}</div>`;
 }
 
@@ -1581,14 +1590,14 @@ function attMonth() {
   const weekend = (d) => [0, 6].includes(parseDay(d).getDay());
   const cell = (x, d) => {
     const rs = (idx[x.id] || {})[d] || [];
-    const abs = rs.find((r) => r.type === "absent"), late = rs.find((r) => r.type === "late");
-    const mark = abs ? (abs.duration && abs.duration !== "whole" ? "½" : "A") + (late ? "L" : "") : late ? "L" : "";
-    const cls = abs ? "bg-red-500 text-white" : late ? "bg-amber-400 text-amber-950" : weekend(d) ? "bg-slate-100 text-slate-300 hover:bg-slate-200" : "text-slate-300 hover:bg-blue-50";
-    const tip = rs.length ? rs.map((r) => `${r.type === "absent" ? `Absent: ${r.kind}` : `Late${r.minutes ? ` ${r.minutes} min` : ""}`}${r.remarks ? ` (${r.remarks})` : ""}`).join("; ") : "Click to tag";
+    const abs = rs.find((r) => r.type === "absent"), late = rs.find((r) => r.type === "late"), uni = rs.find((r) => r.type === "uniform");
+    const mark = (abs ? (abs.duration && abs.duration !== "whole" ? "½" : "A") : "") + (late ? "L" : "") + (uni ? "U" : "");
+    const cls = abs ? "bg-red-500 text-white" : late ? "bg-amber-400 text-amber-950" : uni ? "bg-violet-500 text-white" : weekend(d) ? "bg-slate-100 text-slate-300 hover:bg-slate-200" : "text-slate-300 hover:bg-blue-50";
+    const tip = rs.length ? rs.map((r) => `${r.type === "absent" ? `Absent: ${r.kind}` : r.type === "uniform" ? "No proper uniform" : `Late${r.minutes ? ` ${r.minutes} min` : ""}`}${r.remarks ? ` (${r.remarks})` : ""}`).join("; ") : "Click to tag";
     return `<td class="px-px py-0.5"><button data-act="att-cell" data-pid="${esc(x.id)}" data-date="${d}" title="${esc(x.name)} · ${fmtDay(d)}: ${esc(tip)}"
-      class="w-6 h-7 rounded text-[11px] font-extrabold transition ${cls} ${d === today ? "ring-2 ring-blue-500" : ""}">${mark || "·"}</button></td>`;
+      class="min-w-[1.5rem] h-7 px-px rounded text-[11px] font-extrabold transition ${cls} ${d === today ? "ring-2 ring-blue-500" : ""}">${mark || "·"}</button></td>`;
   };
-  const sumOf = (x) => attendanceSummary(Object.values(idx[x.id] || {}).flat())[0] || { days: 0, lates: 0 };
+  const sumOf = (x) => attendanceSummary(Object.values(idx[x.id] || {}).flat())[0] || { days: 0, lates: 0, uniform: 0 };
   return `
     <div class="flex flex-wrap items-center gap-2 mb-4">
       <input id="mon-month" type="month" data-act="mon-month" value="${m}" title="Month" class="${inputCls}">
@@ -1598,6 +1607,7 @@ function attMonth() {
       <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center">A</span>Absent</span>
       <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center">½</span>Half day absent</span>
       <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-amber-400 text-amber-950 text-[10px] font-extrabold flex items-center justify-center">L</span>Late</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-violet-500 text-white text-[10px] font-extrabold flex items-center justify-center">U</span>No proper uniform</span>
       <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-slate-100 border border-slate-200"></span>Weekend</span>
       <span class="text-slate-500">Click a day to tag or edit it.</span>
     </div>
@@ -1605,13 +1615,13 @@ function attMonth() {
       <thead class="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
         <th class="sticky left-0 z-10 bg-slate-50 text-left font-bold px-3 py-2 min-w-[160px]">Name</th>
         ${days.map((d) => `<th class="font-bold px-0 py-1 w-6 text-center ${weekend(d) ? "text-slate-300" : ""}"><div>${"SMTWTFS"[parseDay(d).getDay()]}</div><div class="tabular text-[11px] ${d === today ? "text-blue-700" : "text-slate-700"}">${Number(d.slice(8))}</div></th>`).join("")}
-        <th class="font-bold px-2 py-2 text-center text-red-700">Abs</th><th class="font-bold px-2 py-2 text-center text-amber-700">Late</th>
+        <th class="font-bold px-2 py-2 text-center text-red-700">Abs</th><th class="font-bold px-2 py-2 text-center text-amber-700">Late</th><th class="font-bold px-2 py-2 text-center text-violet-700" title="Days without proper uniform">Unif</th>
       </tr></thead>
       <tbody class="divide-y divide-black/10">${people.map((x) => {
         const s = sumOf(x);
         return `<tr><td class="sticky left-0 z-10 bg-white px-3 py-1.5"><div class="font-semibold text-slate-900 text-xs whitespace-nowrap">${esc(x.name)}</div><div class="text-[10px] text-slate-500">${PTYPE[x.type]}</div></td>
           ${days.map((d) => cell(x, d)).join("")}
-          <td class="px-2 text-center tabular text-xs font-bold text-red-700">${s.days || "—"}</td><td class="px-2 text-center tabular text-xs font-bold text-amber-700">${s.lates || "—"}</td></tr>`;
+          <td class="px-2 text-center tabular text-xs font-bold text-red-700">${s.days || "—"}</td><td class="px-2 text-center tabular text-xs font-bold text-amber-700">${s.lates || "—"}</td><td class="px-2 text-center tabular text-xs font-bold text-violet-700">${s.uniform || "—"}</td></tr>`;
       }).join("")}</tbody></table></div>` : empty("No one matches.")))}`;
 }
 
@@ -1623,7 +1633,7 @@ function tagAttendance(pid, date, type) {
 }
 function confirmAttClear(pid) {
   const d = state.mon.day;
-  const rs = recsOn(pid, d);
+  const rs = recsOn(pid, d).filter((r) => r.type !== "uniform");
   if (!rs.length) return;
   const x = state.personnel[pid];
   openModal(`<div class="p-6 space-y-3">
@@ -1638,7 +1648,7 @@ function confirmAttClear(pid) {
 async function clearAttendance(pid) {
   try {
     const b = writeBatch(db);
-    recsOn(pid, state.mon.day).forEach((r) => b.delete(doc(db, "attendance", r.id)));
+    recsOn(pid, state.mon.day).filter((r) => r.type !== "uniform").forEach((r) => b.delete(doc(db, "attendance", r.id)));
     await b.commit();
     closeModal();
     toast("Marked present");
@@ -1657,21 +1667,22 @@ function attRecords() {
   const sum = attendanceSummary(recs);
   const days = sum.reduce((n, s) => n + s.days, 0);
   const lates = sum.reduce((n, s) => n + s.lates, 0);
+  const uniform = sum.reduce((n, s) => n + s.uniform, 0);
   return `
     <div class="flex flex-wrap items-center gap-2 mb-4">
       <input id="mon-month" type="month" data-act="mon-month" value="${f.month}" title="Month" class="${inputCls}">
       <input id="mon-q" data-act="mon-q" value="${esc(f.q)}" placeholder="Search name" class="${inputCls} flex-1 min-w-[160px]">
       ${selectBox("mon-ptype", "mon-ptype", [["", "All personnel"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], f.ptype)}
-      <button data-act="att-new" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>Record absence / late</button>
+      <button data-act="att-new" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>Record attendance</button>
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
       ${statTile("Days absent", days, "bg-red-50 text-red-900 border-red-200")}
       ${statTile("Times late", lates, "bg-amber-50 text-amber-900 border-amber-300")}
-      ${statTile("Personnel with records", sum.length, "bg-blue-50 text-blue-900 border-blue-200")}
+      ${statTile("Days without proper uniform", uniform, "bg-violet-50 text-violet-900 border-violet-200")}
       ${statTile("Personnel on list", Object.keys(state.personnel).length, "bg-brand-900 text-white border-brand-950")}
     </div>
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <div class="xl:col-span-2 min-w-0">${panel(panelHead(`Absences and tardiness · ${fmtMonth(f.month)}`) + (recs.length
+      <div class="xl:col-span-2 min-w-0">${panel(panelHead(`Absences, tardiness and uniform · ${fmtMonth(f.month)}`) + (recs.length
         ? table(["Date", "Name", "Record", "Remarks", ""], recs.map((r) => `<tr>
             <td class="px-4 py-3 whitespace-nowrap tabular text-xs font-semibold text-slate-700">${fmtDay(r.date, { weekday: "short", month: "short", day: "numeric" })}</td>
             <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(r.name)}</div><div class="text-xs text-slate-500">${PTYPE[r.ptype] || ""}</div></td>
@@ -1679,12 +1690,13 @@ function attRecords() {
             <td class="px-4 py-3 text-xs text-slate-600 max-w-[260px] whitespace-pre-line">${esc(r.remarks) || "—"}</td>
             <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("att-edit", r.id, "pencil", "Edit")}${delBtn("attendance", r.id)}</td>
           </tr>`))
-        : empty(all.length ? "No records match these filters." : `No absences or tardiness recorded for ${fmtMonth(f.month)}.`)))}</div>
+        : empty(all.length ? "No records match these filters." : `Nothing recorded for ${fmtMonth(f.month)}.`)))}</div>
       <div class="min-w-0">${panel(panelHead("Summary per person") + (sum.length
-        ? table(["Name", "Absent", "Late"], sum.map((s) => `<tr>
+        ? table(["Name", "Absent", "Late", "Uniform"], sum.map((s) => `<tr>
             <td class="px-4 py-2.5"><div class="font-semibold text-slate-900">${esc(s.name)}</div><div class="text-[11px] text-slate-500">${PTYPE[s.ptype] || ""}</div></td>
             <td class="px-4 py-2.5 tabular text-xs font-bold text-red-700 whitespace-nowrap">${s.days ? `${s.days} day${s.days === 1 ? "" : "s"}` : "—"}</td>
-            <td class="px-4 py-2.5 tabular text-xs font-bold text-amber-700 whitespace-nowrap">${s.lates ? `${s.lates}×${s.minutes ? ` · ${s.minutes} min` : ""}` : "—"}</td>
+            <td class="px-4 py-2.5 tabular text-xs font-bold text-amber-700 whitespace-nowrap">${s.lates ? `${s.lates}×${s.minutes ? ` · ${fmtMins(s.minutes)}` : ""}` : "—"}</td>
+            <td class="px-4 py-2.5 tabular text-xs font-bold text-violet-700 whitespace-nowrap">${s.uniform ? `${s.uniform} day${s.uniform === 1 ? "" : "s"}` : "—"}</td>
           </tr>`))
         : empty("Nothing recorded.")))}</div>
     </div>`;
@@ -1707,7 +1719,7 @@ function openAttendance(id, pre = {}) {
     <span class="flex items-center justify-center gap-2 py-2.5 rounded-lg border-2 text-sm font-bold transition border-slate-200 text-slate-500 peer-checked:border-brand-800 peer-checked:bg-brand-50 peer-checked:text-brand-900"><i data-lucide="${icon}" class="w-4 h-4"></i>${text}</span></label>`;
   const kinds = ABSENCE_KINDS.slice();
   if (r && r.kind && !kinds.includes(r.kind)) kinds.push(r.kind);
-  openModal(`${modalHead(r ? "Edit attendance record" : "Record absence or tardiness", "Human Resource · Attendance monitoring")}
+  openModal(`${modalHead(r ? "Edit attendance record" : "Record attendance", "Human Resource · Attendance monitoring")}
     <div class="p-6 space-y-4">
       <div>${lbl("att-pid", "Name")}
         <select id="att-pid" class="w-full ${inputCls}">
@@ -1715,7 +1727,7 @@ function openAttendance(id, pre = {}) {
           ${r && !state.personnel[r.pid] ? `<option value="${esc(r.pid)}" selected>${esc(r.name)} (removed from list)</option>` : ""}
           ${group("teaching")}${group("nonteaching")}
         </select></div>
-      <div class="grid grid-cols-2 gap-2">${typeBtn("absent", "Absent", "user-x")}${typeBtn("late", "Late / Tardy", "clock")}</div>
+      <div class="grid grid-cols-3 gap-2">${typeBtn("absent", "Absent", "user-x")}${typeBtn("late", "Late / Tardy", "clock")}${typeBtn("uniform", "No uniform", "shirt")}</div>
       <div id="att-absent" class="space-y-3 ${type === "absent" ? "" : "hidden"}">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           ${field("att-from", r ? "Date" : "Date (from)", "date", `value="${day}"`)}
@@ -1732,9 +1744,14 @@ function openAttendance(id, pre = {}) {
         ${field("att-time", "Time in", "time", `value="${r ? esc(r.timeIn || "") : ""}"`)}
         ${field("att-min", "Minutes late", "number", `min="1" max="600" value="${r && r.minutes ? r.minutes : ""}"`)}
       </div>
+      <div id="att-uniform" class="space-y-2 ${type === "uniform" ? "" : "hidden"}">
+        ${field("att-udate", "Date", "date", `value="${day}"`)}
+        <p class="text-[11px] text-slate-500">Did not wear the proper uniform on this day. Counted per day in the monthly report.</p>
+      </div>
       <div>${lbl("att-remarks", 'Remarks <span class="font-normal text-slate-400">(optional)</span>')}
         <textarea id="att-remarks" rows="3" maxlength="500" placeholder="e.g. With approved leave form · fever · heavy traffic" class="w-full ${inputCls} resize-y">${esc(r ? r.remarks : "")}</textarea></div>
     </div>
+    ${r ? `<div class="px-6 pb-3"><button data-act="mon-del" data-col="attendance" data-id="${esc(id)}" class="text-xs font-semibold text-red-700 hover:underline">Delete this record</button></div>` : ""}
     ${modalFoot("att-save", r ? "Save changes" : "Save record", id || "")}`);
 }
 
@@ -1768,8 +1785,14 @@ async function saveAttendance(id) {
     if (!(minutes > 0) && !timeIn) return toast("Enter the time in or the minutes late.", "warn");
     dates = [date];
     Object.assign(base, { kind: "", duration: "", timeIn, minutes: minutes > 0 ? Math.min(minutes, 600) : 0 });
+  } else if (type === "uniform") {
+    const date = val("att-udate");
+    if (!isDay(date)) return toast("Pick the date.", "warn");
+    if (recsOn(pid, date).some((r) => r.type === "uniform" && r.id !== id)) return toast("Already recorded for that day.", "warn");
+    dates = [date];
+    Object.assign(base, { kind: "", duration: "", timeIn: "", minutes: 0 });
   } else {
-    return toast("Choose Absent or Late.", "warn");
+    return toast("Choose Absent, Late or No uniform.", "warn");
   }
   try {
     if (id) {
@@ -1780,7 +1803,7 @@ async function saveAttendance(id) {
       await b.commit();
     }
     closeModal();
-    toast(id ? "Record updated" : `Saved: ${person.name} · ${type === "absent" ? `absent ${dates.length > 1 ? `${dates.length} days` : fmtDay(dates[0])}` : "late"}`);
+    toast(id ? "Record updated" : `Saved: ${person.name} · ${type === "absent" ? `absent ${dates.length > 1 ? `${dates.length} days` : fmtDay(dates[0])}` : type === "uniform" ? "no proper uniform" : "late"}`);
     // Show the month the record went into.
     const m = dates[0].slice(0, 7);
     if (m !== state.mon.month) { state.mon.month = m; watchAttendance(); render(); }
@@ -2167,9 +2190,10 @@ function renderReports() {
       <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-3 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
     </div>`;
   const cards = [];
-  if (p.hr) cards.push(card("att", "calendar-x", "bg-red-50 text-red-700", "Attendance and Punctuality",
-    "Absences with kind and remarks, tardiness, a summary per person and the perfect attendance list.",
-    `${range("att")}<div>${lbl("rep-att-type", "Personnel")}${selectBox("rep-att-type", "rep-type", [["", "Teaching and non-teaching"], ["teaching", "Teaching only"], ["nonteaching", "Non-teaching only"]], r.attType, "w-full")}</div>`));
+  if (p.hr) cards.push(card("att", "calendar-x", "bg-red-50 text-red-700", "Monthly Attendance Report",
+    "Per teacher and non-teaching personnel: absences, tardiness in minutes and hours, and days without the proper uniform.",
+    `<div>${lbl("rep-att-month", "Month")}<input id="rep-att-month" type="month" data-act="rep-month" value="${r.att[0].slice(0, 7)}" class="w-full ${inputCls}"></div>
+    <div>${lbl("rep-att-type", "Personnel")}${selectBox("rep-att-type", "rep-type", [["", "Teaching and non-teaching"], ["teaching", "Teaching only"], ["nonteaching", "Non-teaching only"]], r.attType, "w-full")}</div>`));
   if (p.clinic) cards.push(card("aor", "sparkles", "bg-emerald-50 text-emerald-700", "AOR · Cleanest Classroom",
     "1st, 2nd and 3rd place for each week, plus the overall standing.", range("aor")));
   if (p.dll) cards.push(card("dll", "book-open-check", "bg-blue-50 text-blue-700", "Daily Lesson Log",
@@ -2249,35 +2273,54 @@ function reportDoc({ title, subtitle, period, ref, sections, sigs }) {
 </body></html>`;
 }
 
+// Monthly attendance: every teacher and non-teaching personnel with their absences, tardiness
+// (minutes and hours) and days without the proper uniform, then the details.
 function buildAttendanceReport(recs, from, to, ptype) {
   recs = recs.filter((r) => !ptype || r.ptype === ptype).sort((a, b) => a.date.localeCompare(b.date) || byName(a, b));
-  const sum = attendanceSummary(recs);
-  const abs = recs.filter((r) => r.type === "absent");
-  const late = recs.filter((r) => r.type === "late");
-  const days = sum.reduce((n, s) => n + s.days, 0);
-  const roster = Object.values(state.personnel).filter((x) => !ptype || x.type === ptype);
-  const withRecords = new Set(sum.map((s) => s.pid));
-  const perfect = roster.filter((x) => !withRecords.has(x.id)).sort(byName);
-  const day = (s) => fmtDay(s, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const sum = Object.fromEntries(attendanceSummary(recs).map((s) => [s.pid, s]));
+  // Everyone on the personnel list, plus anyone with records who was removed since.
+  const zero = { days: 0, lates: 0, minutes: 0, uniform: 0 };
+  const roster = Object.values(state.personnel).filter((x) => !ptype || x.type === ptype)
+    .map((x) => ({ pid: x.id, name: x.name, ptype: x.type, position: x.position || "" }));
+  Object.values(sum).forEach((s) => { if (!roster.some((x) => x.pid === s.pid)) roster.push({ pid: s.pid, name: s.name, ptype: s.ptype, position: "" }); });
+  const all = roster.map((x) => ({ ...x, ...zero, ...(sum[x.pid] || {}), name: x.name, ptype: x.ptype }));
+  const total = (list, k) => list.reduce((n, x) => n + x[k], 0);
+  const perfect = all.filter((x) => !x.days && !x.lates && !x.uniform).sort(byName);
+  const day = (s) => fmtDay(s, { weekday: "short", month: "short", day: "numeric" });
+  const perPerson = (pt) => {
+    const list = all.filter((x) => x.ptype === pt).sort(byName);
+    if (!list.length) return `<div class="empty">No ${PTYPE[pt].toLowerCase()} personnel on the list.</div>`;
+    const cell = (v) => `<td class="mark">${v || "—"}</td>`;
+    const tot = (k) => `<td class="mark"><b>${total(list, k) || "—"}</b></td>`;
+    return `<table class="movs"><thead><tr><th class="num">#</th><th>Name</th><th>Position</th><th>Days absent</th><th>Times late</th>
+      <th>Tardiness (minutes)</th><th>Tardiness (hours)</th><th>Days without proper uniform</th></tr></thead><tbody>
+      ${list.map((x, i) => `<tr><td class="num">${i + 1}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.position) || "—"}</td>
+        ${cell(x.days)}${cell(x.lates)}${cell(x.minutes)}<td class="mark" style="white-space:nowrap">${fmtMins(x.minutes)}</td>${cell(x.uniform)}</tr>`).join("")}
+      <tr><td></td><td colspan="2"><b>Total</b></td>${tot("days")}${tot("lates")}${tot("minutes")}
+        <td class="mark" style="white-space:nowrap"><b>${fmtMins(total(list, "minutes"))}</b></td>${tot("uniform")}</tr>
+      </tbody></table>`;
+  };
+  const types = ptype ? [ptype] : ["teaching", "nonteaching"];
+  const month = from.slice(0, 7);
   return reportDoc({
-    title: "Attendance and Punctuality Report",
+    title: "Monthly Attendance Report",
     subtitle: ptype ? `${PTYPE[ptype]} personnel` : "Teaching and non-teaching personnel",
-    period: periodText(from, to),
-    ref: `ATT-${from.replace(/-/g, "")}-${to.replace(/-/g, "")}`,
+    period: fmtMonth(month),
+    ref: `ATT-${month.replace("-", "")}${ptype ? "-" + ptype.toUpperCase() : ""}`,
     sections: [
-      ["Summary", `<div class="stats">${stat(roster.length, "Personnel")}${stat(days, "Days absent")}${stat(late.length, "Times late")}${stat(perfect.length, "Perfect attendance")}</div>`],
-      ["Summary per Personnel", rptTable(["#", "Name", "Type", "Days absent", "Times late", "Minutes late"], sum.map((s, i) => `<tr>
-        <td class="num">${i + 1}</td><td><b>${esc(s.name)}</b></td><td>${PTYPE[s.ptype] || "—"}</td>
-        <td class="mark">${s.days || "—"}</td><td class="mark">${s.lates || "—"}</td><td class="mark">${s.minutes || "—"}</td></tr>`))],
-      ["Absences", rptTable(["#", "Date", "Name", "Kind of absence", "Duration", "Remarks"], abs.map((r, i) => `<tr>
+      ["Summary", `<div class="stats">${stat(roster.length, "Personnel")}${stat(total(all, "days"), "Days absent")}${stat(fmtMins(total(all, "minutes")), "Total tardiness")}${stat(total(all, "uniform"), "Days without proper uniform")}</div>`],
+      ...types.map((pt) => [`${PTYPE[pt]} Personnel`, perPerson(pt)]),
+      ["Absences", rptTable(["#", "Date", "Name", "Kind of absence", "Duration", "Remarks"], recs.filter((r) => r.type === "absent").map((r, i) => `<tr>
         <td class="num">${i + 1}</td><td style="white-space:nowrap">${day(r.date)}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.kind) || "—"}</td>
         <td style="white-space:nowrap">${(DURATION[r.duration] || DURATION.whole)[0]}</td><td>${esc(r.remarks) || "—"}</td></tr>`))],
-      ["Tardiness", rptTable(["#", "Date", "Name", "Time in", "Minutes late", "Remarks"], late.map((r, i) => `<tr>
+      ["Tardiness", rptTable(["#", "Date", "Name", "Time in", "Minutes late", "Remarks"], recs.filter((r) => r.type === "late").map((r, i) => `<tr>
         <td class="num">${i + 1}</td><td style="white-space:nowrap">${day(r.date)}</td><td><b>${esc(r.name)}</b></td>
         <td style="white-space:nowrap">${fmtTime(r.timeIn) || "—"}</td><td class="mark">${r.minutes || "—"}</td><td>${esc(r.remarks) || "—"}</td></tr>`))],
+      ["Without Proper Uniform", rptTable(["#", "Date", "Name", "Remarks"], recs.filter((r) => r.type === "uniform").map((r, i) => `<tr>
+        <td class="num">${i + 1}</td><td style="white-space:nowrap">${day(r.date)}</td><td><b>${esc(r.name)}</b></td><td>${esc(r.remarks) || "—"}</td></tr>`))],
       ["Perfect Attendance", perfect.length
-        ? `<p class="lead">No absence or tardiness recorded in this period.</p><ol class="names">${perfect.map((x) => `<li>${esc(x.name)} <span class="muted">· ${PTYPE[x.type] || ""}</span></li>`).join("")}</ol>`
-        : `<div class="empty">None in this period.</div>`]
+        ? `<p class="lead">No absence, tardiness or uniform record this month.</p><ol class="names">${perfect.map((x) => `<li>${esc(x.name)} <span class="muted">· ${PTYPE[x.ptype] || ""}</span></li>`).join("")}</ol>`
+        : `<div class="empty">None this month.</div>`]
     ],
     sigs: [[myName(), "Prepared by · Human Resource"], ["", "Noted by · School Head"]]
   });
@@ -2501,6 +2544,7 @@ document.addEventListener("change", (e) => {
     case "att-type":
       $("#att-absent").classList.toggle("hidden", el.value !== "absent");
       $("#att-late").classList.toggle("hidden", el.value !== "late");
+      $("#att-uniform").classList.toggle("hidden", el.value !== "uniform");
       break;
     case "aor-week": aorWeekChanged(el.value); break;
     case "dll-subject":
@@ -2510,6 +2554,7 @@ document.addEventListener("change", (e) => {
     case "dll-status": (state.dllDrafts[el.dataset.pid] ||= {}).status = el.value; render(); break;
     case "rep-date": state.rep[el.dataset.k][Number(el.dataset.i)] = el.value; break;
     case "rep-type": state.rep.attType = el.value; break;
+    case "rep-month": if (/^\d{4}-\d{2}$/.test(el.value)) state.rep.att = monthRange(el.value); break;
     case "rep-subject": state.rep.dllSubject = el.value; break;
   }
 });
