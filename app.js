@@ -343,9 +343,10 @@ function field(id, label, type = "text", extra = "") {
     <input id="${id}" name="${id}" type="${type}" ${extra} class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>`;
 }
 
-// Public demo logins shown on the sign-in page. Only roles that see their own records belong here;
-// the demo Admin and HR logins can see real staff data, so they are not listed.
+// Public demo logins shown on the sign-in page. Demo accounts only see demo records (firestore.rules);
+// the demo Admin login can see every application, so it is not listed.
 const DEMO_LOGINS = [
+  { role: "HR", text: "Maria Santos: attendance sheet, month view, personnel and the monthly attendance report", email: "demo.hr@svnhs-demo.ph", password: "Demo-HR-2026" },
   { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
   { role: "Non-teaching staff", text: "Ana Lim: a submitted application under committee review", email: "demo.staff@svnhs-demo.ph", password: "Demo-Staff-2026" }
 ];
@@ -1461,7 +1462,7 @@ function savePersonnelEntry(user, name, position, dept) {
     name: String(name).slice(0, 120), type, position,
     subject: type === "teaching" && SUBJECTS.includes(dept) ? dept : "",
     office: type === "nonteaching" ? dept : "",
-    email: user.email || "", by: user.email || "", updatedAt: serverTimestamp()
+    email: user.email || "", by: user.email || "", updatedAt: serverTimestamp(), ...demoMark()
   }, { merge: true });
 }
 
@@ -1544,6 +1545,11 @@ async function cancelRequest() {
 }
 
 // Live listeners, replaced when the month / week changes and dropped on sign-out.
+// Public demo accounts (…@svnhs-demo.ph) work only on records marked demo: true; firestore.rules enforces it.
+const isDemoUser = () => /@svnhs-demo\.ph$/i.test((state.user && state.user.email) || "");
+const demoOnly = (...w) => (isDemoUser() ? [where("demo", "==", true), ...w] : w);
+const demoMark = () => (isDemoUser() ? { demo: true } : {});
+
 function watch(key, ref, set) {
   if (state.watches[key]) state.watches[key]();
   state.watches[key] = onSnapshot(ref, (snap) => {
@@ -1556,7 +1562,7 @@ function watch(key, ref, set) {
 function startMonitoring() {
   const p = state.perms;
   if (!p) return;
-  if (p.hr || p.dll) watch("personnel", collection(db, "personnel"), (d) => { state.personnel = d; });
+  if (p.hr || p.dll) watch("personnel", query(collection(db, "personnel"), ...demoOnly()), (d) => { state.personnel = d; });
   if (p.clinic) watch("aor", collection(db, "aor"), (d) => { state.aor = d; });
   if (p.admin) watch("monitors", collection(db, "monitors"), (d) => { state.monitors = d; });
   if (p.admin) watch("requests", collection(db, "accessRequests"), (d) => { state.requests = d; });
@@ -1570,7 +1576,7 @@ function restartMonitoring() {
 }
 function watchAttendance() {
   const m = state.mon.month;
-  watch("attendance", query(collection(db, "attendance"), where("date", ">=", `${m}-01`), where("date", "<=", `${m}-31`)),
+  watch("attendance", query(collection(db, "attendance"), ...demoOnly(where("date", ">=", `${m}-01`), where("date", "<=", `${m}-31`))),
     (d) => { state.attendance = d; });
 }
 function watchDll() {
@@ -1967,10 +1973,10 @@ async function saveAttendance(id) {
   }
   try {
     if (id) {
-      await updateDoc(doc(db, "attendance", id), { ...base, date: dates[0] });
+      await updateDoc(doc(db, "attendance", id), { ...base, ...demoMark(), date: dates[0] });
     } else {
       const b = writeBatch(db);
-      dates.forEach((d) => b.set(doc(collection(db, "attendance")), { ...base, date: d, createdAt: serverTimestamp() }));
+      dates.forEach((d) => b.set(doc(collection(db, "attendance")), { ...base, ...demoMark(), date: d, createdAt: serverTimestamp() }));
       await b.commit();
     }
     closeModal();
@@ -2241,7 +2247,7 @@ async function savePerson(id) {
       name: name.slice(0, 120), type, position,
       subject: type === "teaching" && SUBJECTS.includes(dept) ? dept : "",
       office: type === "nonteaching" ? dept : "",
-      by: state.user.email, updatedAt: serverTimestamp()
+      by: state.user.email, updatedAt: serverTimestamp(), ...demoMark()
     });
     closeModal();
     toast("Saved");
@@ -2384,7 +2390,7 @@ async function generateMonReport(kind) {
   w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Preparing report…</p>');
   try {
     const rows = async (col, field, a, b) => {
-      const snap = await getDocs(query(collection(db, col), where(field, ">=", a), where(field, "<=", b)));
+      const snap = await getDocs(query(collection(db, col), ...(col === "attendance" ? demoOnly(where(field, ">=", a), where(field, "<=", b)) : [where(field, ">=", a), where(field, "<=", b)])));
       return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     };
     let html;

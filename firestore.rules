@@ -26,6 +26,9 @@ service cloud.firestore {
     }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
     function isSelf(uid) { return verified() && request.auth.uid == uid; }
+    // Public demo accounts (…@svnhs-demo.ph): Monitoring data limited to records marked demo: true.
+    function isDemo() { return signedIn() && request.auth.token.email.matches('.*@svnhs-demo[.]ph$'); }
+    function demoOk(d) { return !isDemo() || d.get('demo', false) == true; }
 
     function reopened(uid) {
       let r = /databases/$(database)/documents/reviews/$(uid);
@@ -137,7 +140,7 @@ service cloud.firestore {
 
     function validPerson() {
       let d = request.resource.data;
-      return d.keys().hasOnly(['name', 'type', 'subject', 'office', 'position', 'email', 'by', 'createdAt', 'updatedAt'])
+      return d.keys().hasOnly(['name', 'type', 'subject', 'office', 'position', 'email', 'by', 'demo', 'createdAt', 'updatedAt'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 120
         && d.type in ['teaching', 'nonteaching']
         && (d.subject == '' || d.subject in subjects())
@@ -151,15 +154,16 @@ service cloud.firestore {
     }
 
     match /personnel/{id} {
-      allow read: if can('hr') || can('dll') || isOwner(id);
-      allow create, update: if validPerson() && (can('hr') || ownPerson(id));
-      allow delete: if can('hr');
+      allow read: if isOwner(id) || ((can('hr') || can('dll')) && demoOk(resource.data));
+      allow create, update: if validPerson() && (ownPerson(id) || (can('hr') && demoOk(request.resource.data)))
+        && (resource == null || ownPerson(id) || demoOk(resource.data));
+      allow delete: if can('hr') && demoOk(resource.data);
     }
 
     match /attendance/{id} {
-      allow read, delete: if can('hr');
-      allow create, update: if can('hr')
-        && request.resource.data.keys().hasOnly(['pid', 'name', 'ptype', 'type', 'date', 'kind', 'duration', 'timeIn', 'minutes', 'remarks', 'by', 'createdAt', 'updatedAt'])
+      allow read, delete: if can('hr') && demoOk(resource.data);
+      allow create, update: if can('hr') && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
+        && request.resource.data.keys().hasOnly(['pid', 'name', 'ptype', 'type', 'date', 'kind', 'duration', 'timeIn', 'minutes', 'remarks', 'by', 'demo', 'createdAt', 'updatedAt'])
         && request.resource.data.pid is string
         && str(request.resource.data.name, 120)
         && request.resource.data.type in ['absent', 'late', 'uniform']
