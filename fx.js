@@ -1,31 +1,8 @@
-// Motion and visual effects (after lightdrop.com): smooth scroll, scroll progress line,
-// fade-up reveals, and the sign-in "constellation" where points flow into one glowing light.
-// Everything stays still for people who ask their device for reduced motion.
+// Motion and visual effects: page entrances, fade-up reveals, and the sign-in network where points
+// flow into one glowing light. Everything stays still for people who ask their device for reduced motion.
 const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-export function initFx() {
-  if (window.Lenis && !reduce.matches) {
-    const lenis = new window.Lenis({ lerp: 0.1 });
-    const raf = (t) => { lenis.raf(t); requestAnimationFrame(raf); };
-    requestAnimationFrame(raf);
-  }
-  // Orange progress line along the bottom edge.
-  const bar = document.getElementById("ld-progress");
-  let queued = false;
-  const update = () => {
-    queued = false;
-    const max = document.documentElement.scrollHeight - window.innerHeight;
-    bar.style.transform = `scaleX(${max > 0 ? Math.min(1, window.scrollY / max) : 0})`;
-  };
-  const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
-  window.addEventListener("scroll", queue, { passive: true });
-  window.addEventListener("resize", queue);
-  new MutationObserver(queue).observe(document.getElementById("main"), { childList: true });
-  // The tab bar sticks right under the header, whatever height the header wraps to.
-  const header = document.querySelector("header");
-  const nav = document.getElementById("tabs");
-  new ResizeObserver(() => { nav.style.top = header.offsetHeight + "px"; }).observe(header);
-}
+export function initFx() {}
 
 // Page change: replay the staggered fade-up on <main> (only when the view changes, not on live updates).
 let lastView = "";
@@ -58,7 +35,7 @@ export function reveal(root) {
 }
 
 // ----- Constellation -----
-// Points on the left, joined by faint curves that run into one glowing orange light; sparks travel
+// Points on the left, joined by faint curves that run into one glowing light; sparks travel
 // along the curves. The layout is seeded so it stays put when the sign-in form re-renders, and the
 // draw-in intro plays only once per visit.
 let introStart = 0;
@@ -136,7 +113,7 @@ export function constellation(canvas) {
       ctx.beginPath();
       ctx.moveTo(c.pts[0].x, c.pts[0].y);
       for (let i = 1; i <= n; i++) ctx.lineTo(c.pts[i].x, c.pts[i].y);
-      ctx.strokeStyle = c.hot ? "rgba(255,77,46,0.38)" : "rgba(245,241,235,0.11)";
+      ctx.strokeStyle = c.hot ? "rgba(43,212,122,0.34)" : "rgba(201,206,214,0.11)";
       ctx.stroke();
     }
 
@@ -144,11 +121,11 @@ export function constellation(canvas) {
       const a = Math.min(1, e * 1.4);
       ctx.beginPath();
       ctx.arc(n.x, n.y, 4.5, 0, 6.283);
-      ctx.fillStyle = `rgba(245,241,235,${0.08 * a})`;
+      ctx.fillStyle = `rgba(201,206,214,${0.08 * a})`;
       ctx.fill();
       ctx.beginPath();
       ctx.arc(n.x, n.y, 2.2 + 0.4 * Math.sin(now * 0.002 + n.ph), 0, 6.283);
-      ctx.fillStyle = `rgba(245,241,235,${0.85 * a})`;
+      ctx.fillStyle = `rgba(201,206,214,${0.85 * a})`;
       ctx.fill();
     }
 
@@ -162,7 +139,7 @@ export function constellation(canvas) {
           const q = bez(s.c, Math.max(0, s.t - k * 0.012));
           ctx.beginPath();
           ctx.arc(q.x, q.y, 1.8 - k * 0.35, 0, 6.283);
-          ctx.fillStyle = s.c.hot ? `rgba(255,95,60,${a * (0.95 - k * 0.22)})` : `rgba(245,241,235,${a * (0.7 - k * 0.16)})`;
+          ctx.fillStyle = s.c.hot ? `rgba(43,212,122,${a * (0.95 - k * 0.22)})` : `rgba(201,206,214,${a * (0.7 - k * 0.16)})`;
           ctx.fill();
         }
       }
@@ -171,12 +148,12 @@ export function constellation(canvas) {
     // The light everything flows into.
     const pulse = 0.5 + 0.5 * Math.sin(now * 0.0022);
     const glow = ctx.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, 70 + pulse * 14);
-    glow.addColorStop(0, `rgba(255,77,46,${0.55 * e})`);
-    glow.addColorStop(0.35, `rgba(255,77,46,${0.18 * e})`);
-    glow.addColorStop(1, "rgba(255,77,46,0)");
+    glow.addColorStop(0, `rgba(85,152,231,${0.55 * e})`);
+    glow.addColorStop(0.35, `rgba(85,152,231,${0.18 * e})`);
+    glow.addColorStop(1, "rgba(85,152,231,0)");
     ctx.fillStyle = glow;
     ctx.beginPath(); ctx.arc(orb.x, orb.y, 90, 0, 6.283); ctx.fill();
-    ctx.beginPath(); ctx.arc(orb.x, orb.y, 8 * e, 0, 6.283); ctx.fillStyle = "#ff4d2e"; ctx.fill();
+    ctx.beginPath(); ctx.arc(orb.x, orb.y, 8 * e, 0, 6.283); ctx.fillStyle = "#5598e7"; ctx.fill();
     ctx.beginPath(); ctx.arc(orb.x, orb.y, 3 * e, 0, 6.283); ctx.fillStyle = "#fff"; ctx.fill();
   }
 

@@ -5,134 +5,112 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BLESS PRAISE Portal - San Vicente NHS</title>
 <link rel="icon" type="image/png" href="logo.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
 <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
 <script>
-  // Look and feel: ink + warm cream with one orange accent, Space Grotesk / Space Mono.
+  // Look and feel follows the CKSS Client Portal: dark sidebar, white top bar, light workspace, one blue accent.
   // "brand" is the ink scale and "depedGold" the accent, so existing classes pick up the theme.
   tailwind.config = {
     theme: {
       extend: {
         colors: {
-          brand: { 50: '#f7f4ef', 100: '#efeae2', 200: '#e2dbd0', 500: '#7a736c', 600: '#4a4540', 800: '#1f1c1a', 900: '#141210', 950: '#0b0a09' },
-          depedGold: { 400: '#ff6a47', 500: '#ff4d2e', 600: '#e63a1c' },
-          cream: '#f5f1eb'
+          brand: { 50: '#fcfcfb', 100: '#f0efec', 200: '#e1e0d9', 500: '#6f6d68', 600: '#52514e', 800: '#1a202b', 900: '#12161c', 950: '#0b0b0b' },
+          depedGold: { 400: '#5598e7', 500: '#1c5cab', 600: '#174d8f' },
+          cream: '#f6f6f4'
         },
         fontFamily: {
-          sans: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
-          serif: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
-          mono: ['"Space Mono"', 'ui-monospace', 'monospace']
+          sans: ['system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
+          serif: ['system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
+          mono: ['ui-monospace', '"Cascadia Code"', 'Consolas', 'monospace']
         }
       }
     }
   }
 </script>
 <style>
-  :root { --ink: #0b0a09; --cream: #f5f1eb; --accent: #ff4d2e; --ease: cubic-bezier(0.25, 0.1, 0.25, 1); --ease-out: cubic-bezier(0.22, 1, 0.36, 1); }
-  html.lenis, html.lenis body { height: auto; }
-  .lenis.lenis-smooth { scroll-behavior: auto !important; }
-  .lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+  :root { --accent: #1c5cab; --ease-out: cubic-bezier(0.22, 1, 0.36, 1); }
   body { overflow-x: clip; }
-  ::selection { background: var(--accent); color: #fff; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #cfc7bb; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb { background: #c3c2b7; border-radius: 9999px; }
   .tabular { font-variant-numeric: tabular-nums; }
-  h1, h2, h3 { letter-spacing: -0.02em; }
-  /* Small uppercase labels are set in Space Mono, like Lightdrop's "MENU ●". */
-  .uppercase.tracking-wider, .uppercase.tracking-widest, .ld-kicker { font-family: "Space Mono", ui-monospace, monospace; letter-spacing: 0.12em; }
-  .ld-kicker { display: inline-flex; align-items: center; gap: .5rem; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-  .ld-kicker::before { content: ""; width: 6px; height: 6px; border-radius: 9999px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  .ld-kicker { display: block; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
 
-  /* Page change: content fades up and un-blurs, staggered. */
-  @keyframes ldIn { from { opacity: 0; transform: translateY(18px); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
-  .ld-enter > *, .ld-enter > * > .grid > * { animation: ldIn .8s var(--ease) both; }
-  .ld-enter > :nth-child(2) { animation-delay: .07s; } .ld-enter > :nth-child(3) { animation-delay: .14s; }
-  .ld-enter > :nth-child(4) { animation-delay: .21s; } .ld-enter > :nth-child(n+5) { animation-delay: .28s; }
-  .ld-enter > * > .grid > :nth-child(2) { animation-delay: .1s; } .ld-enter > * > .grid > :nth-child(3) { animation-delay: .16s; }
-  .ld-enter > * > .grid > :nth-child(4) { animation-delay: .22s; } .ld-enter > * > .grid > :nth-child(n+5) { animation-delay: .28s; }
+  /* Shell: sidebar + top bar, hidden while signed out */
+  .signed-out #sidebar, .signed-out #topbar, .signed-out #footer { display: none; }
+  .signed-out #main { max-width: none; padding: 0; }
+  .signed-out #shell { display: block; }
+  #sidebar .nav-btn { color: #c9ced6; }
+  #sidebar .nav-btn:hover { background: rgba(255, 255, 255, 0.06); }
+  #sidebar .nav-btn.active { background: rgba(255, 255, 255, 0.10); color: #fff; }
+
+  /* Page change: content rises in, staggered. */
+  @keyframes ldIn { from { opacity: 0; transform: translateY(14px) scale(0.99); } to { opacity: 1; transform: none; } }
+  .ld-enter > *, .ld-enter > * > .grid > * { animation: ldIn .7s var(--ease-out) both; }
+  .ld-enter > :nth-child(2) { animation-delay: .06s; } .ld-enter > :nth-child(3) { animation-delay: .12s; }
+  .ld-enter > :nth-child(4) { animation-delay: .18s; } .ld-enter > :nth-child(n+5) { animation-delay: .24s; }
+  .ld-enter > * > .grid > :nth-child(2) { animation-delay: .08s; } .ld-enter > * > .grid > :nth-child(3) { animation-delay: .14s; }
+  .ld-enter > * > .grid > :nth-child(4) { animation-delay: .2s; } .ld-enter > * > .grid > :nth-child(n+5) { animation-delay: .26s; }
+  @keyframes navIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+  .nav-enter .nav-btn { animation: navIn .6s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 45ms + 120ms); }
 
   /* Scroll reveals */
-  [data-reveal] { opacity: 0; transform: translateY(28px); filter: blur(10px); transition: opacity .9s var(--ease), transform .9s var(--ease), filter .9s var(--ease); }
-  [data-reveal].is-in { opacity: 1; transform: none; filter: none; }
+  [data-reveal] { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .9s var(--ease-out); }
+  [data-reveal].is-in { opacity: 1; transform: none; }
   [data-reveal].no-anim { transition: none; }
 
-  /* Sign-in hero */
-  .ld-hero { background: radial-gradient(120% 90% at 85% 40%, #1c120e 0%, var(--ink) 55%); }
-  .ld-word { display: inline-block; animation: ldWord 1s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 90ms + 250ms); }
-  @keyframes ldWord { from { opacity: 0; transform: translateY(40%); filter: blur(14px); } to { opacity: 1; transform: none; filter: none; } }
-  .ld-played .ld-word, .ld-played .ld-fade { animation: none; }
-  .ld-fade { animation: ldIn 1s var(--ease) both; animation-delay: var(--d, .9s); }
-  @keyframes ldBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
-  .ld-bob { animation: ldBob 1.5s ease-in-out infinite; }
-
-  /* Marquee */
-  .ld-marquee { mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent); }
-  .ld-track { display: flex; width: max-content; animation: ldMarquee 45s linear infinite; }
-  .ld-marquee:hover .ld-track { animation-play-state: paused; }
-  @keyframes ldMarquee { to { transform: translateX(-50%); } }
-
-  /* Award cards */
-  .ld-card { transition: background-color .5s var(--ease), color .5s var(--ease), box-shadow .5s var(--ease), transform .5s var(--ease-out); }
-  .ld-card:hover { transform: translateY(-4px); box-shadow: 0 24px 48px -24px rgba(11, 10, 9, .45); }
-  .ld-card .ld-arrow { transition: transform .5s var(--ease-out), opacity .4s var(--ease); }
-
-  #ld-progress { transform-origin: 0 50%; transition: transform .1s linear; }
+  /* Sign-in: always dark, network animation behind */
+  .ld-hero { background: radial-gradient(1100px 700px at 75% 20%, #0f1a2b 0%, transparent 60%), #07090d; }
+  .ld-hero::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(90deg, rgba(7, 9, 13, 0.7) 0%, rgba(7, 9, 13, 0.15) 45%, rgba(7, 9, 13, 0.55) 100%); }
+  @media (max-width: 1023px) { .ld-hero::after { background: linear-gradient(180deg, rgba(7, 9, 13, 0.35) 0%, rgba(7, 9, 13, 0.75) 100%); } }
+  .ld-grad { background: linear-gradient(92deg, #2bd47a, #5598e7); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ld-word { display: inline-block; overflow: hidden; vertical-align: bottom; padding-bottom: 0.08em; }
+  .ld-word > span { display: inline-block; animation: ldRise 1s var(--ease-out) both; animation-delay: calc(var(--i, 0) * 180ms + 250ms); }
+  @keyframes ldRise { from { transform: translateY(110%); } to { transform: none; } }
+  .ld-played .ld-word > span, .ld-played .ld-fade { animation: none; }
+  .ld-fade { animation: ldIn .9s var(--ease-out) both; animation-delay: var(--d, .9s); }
+  .ld-auth input, .ld-auth select { background-color: rgba(7, 9, 13, 0.6); border-color: rgba(255, 255, 255, 0.18); color: #e9eef6; }
+  .ld-auth select option { background: #11151d; }
+  .ld-auth label, .ld-auth .text-slate-700 { color: #e9eef6; }
+  .ld-auth .text-slate-500, .ld-auth .text-slate-600 { color: #8b94a4; }
+  .ld-auth .text-depedGold-500 { color: #5598e7; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
-    [data-reveal] { opacity: 1; transform: none; filter: none; }
+    [data-reveal] { opacity: 1; transform: none; }
   }
-  @media print { .no-print { display: none !important; } body { background: white !important; } }
+  @media print { .no-print, #sidebar, #topbar { display: none !important; } body { background: white !important; } }
 </style>
 </head>
-<body class="bg-cream text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+<body class="signed-out bg-cream text-brand-950 font-sans antialiased">
 
-<header class="bg-brand-950 text-white sticky top-0 z-40 border-b border-white/10">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
-    <a href="./" data-act="home" title="Go to home page" class="group flex items-center gap-3 min-w-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-400">
-      <div class="w-11 h-11 rounded-full bg-white p-0.5 ring-1 ring-white/20 flex-shrink-0 overflow-hidden transition duration-500 group-hover:scale-105 group-hover:ring-depedGold-500 group-hover:ring-2">
-        <img src="logo.png" alt="BLESS seal" class="w-full h-full object-contain rounded-full">
-      </div>
-      <div class="min-w-0">
-        <div class="text-[10px] tracking-wider uppercase font-bold text-white/50">DepEd Region XI <span class="text-depedGold-500">●</span> SDO Panabo City</div>
-        <h1 class="text-base sm:text-lg font-bold leading-tight transition duration-300 group-hover:text-depedGold-400">San Vicente National High School
-          <span class="hidden sm:inline ml-1 align-middle font-mono text-depedGold-400 text-[10px] tracking-[0.14em] px-2 py-0.5 rounded-full border border-depedGold-500/40">BLESS PRAISE</span>
-        </h1>
-      </div>
-    </a>
-    <div id="userbox" class="flex items-center gap-2 text-xs"></div>
+<div id="shell" class="min-h-screen lg:grid lg:grid-cols-[232px_minmax(0,1fr)]">
+  <aside id="sidebar" class="no-print bg-brand-900 text-[#c9ced6] lg:sticky lg:top-0 lg:h-screen flex flex-wrap lg:flex-nowrap lg:flex-col items-center lg:items-stretch gap-2 lg:gap-5 px-4 lg:px-3 py-3 lg:py-5 lg:overflow-y-auto"></aside>
+
+  <div class="min-w-0 flex flex-col min-h-screen">
+    <div id="topbar" class="no-print flex items-center justify-end gap-3 px-4 sm:px-7 py-3 bg-brand-50 border-b border-black/10">
+      <div id="userbox" class="flex flex-wrap items-center justify-end gap-2.5 text-sm"></div>
+    </div>
+
+    <main id="main" class="w-full max-w-[1280px] px-4 sm:px-7 pt-6 pb-12 flex-1">
+      <div class="py-24 text-center text-slate-400 text-sm">Loading…</div>
+    </main>
+
+    <footer id="footer" class="no-print border-t border-black/10 px-4 sm:px-7 py-4 text-brand-500 text-xs flex flex-wrap items-center justify-between gap-2">
+      <span>San Vicente NHS · SDO Panabo City · Region XI</span>
+      <span><strong class="text-brand-950">B</strong>uilding <strong class="text-brand-950">L</strong>eadership, <strong class="text-brand-950">E</strong>xcellence &amp; <strong class="text-brand-950">S</strong>teadfast <strong class="text-brand-950">S</strong>ervice</span>
+    </footer>
   </div>
-</header>
+</div>
 
-<nav id="tabs" class="no-print sticky top-[68px] z-30 bg-cream/85 backdrop-blur-md border-b border-brand-950/10 hidden">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto"></div>
-</nav>
+<div id="modal" data-lenis-prevent class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-black/60 backdrop-blur-sm"></div>
 
-<main id="main" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full flex-1">
-  <div class="py-24 text-center text-slate-400 text-sm">Loading…</div>
-</main>
-
-<footer class="no-print border-t border-brand-950/10 py-6 text-slate-500 text-xs">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
-    <span class="font-mono uppercase tracking-[0.12em] text-[10px]">San Vicente NHS <span class="text-depedGold-500">●</span> SDO Panabo City <span class="text-depedGold-500">●</span> Region XI</span>
-    <span><strong class="text-brand-950">B</strong>uilding <strong class="text-brand-950">L</strong>eadership, <strong class="text-brand-950">E</strong>xcellence &amp; <strong class="text-brand-950">S</strong>teadfast <strong class="text-brand-950">S</strong>ervice</span>
-  </div>
-</footer>
-
-<div id="modal" data-lenis-prevent class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-brand-950/70 backdrop-blur-sm"></div>
-
-<div id="toast" class="fixed bottom-5 right-5 z-50 translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-brand-950 text-white text-xs px-4 py-3 rounded-full shadow-xl flex items-center gap-2">
+<div id="toast" class="fixed bottom-5 right-5 z-50 translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-brand-950 text-white text-sm px-4 py-3 rounded-lg shadow-xl flex items-center gap-2">
   <span id="toast-dot" class="w-2 h-2 rounded-full bg-emerald-400"></span>
   <span id="toast-message"></span>
 </div>
-
-<div id="ld-progress" class="no-print fixed bottom-0 left-0 right-0 h-[3px] bg-depedGold-500 z-50" style="transform:scaleX(0)"></div>
 
 <script type="module" src="app.js"></script>
 </body>

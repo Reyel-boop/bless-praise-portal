@@ -58,7 +58,7 @@ function errorText(e) {
 
 function openModal(html) {
   const m = $("#modal");
-  m.innerHTML = `<div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto border border-slate-200">${html}</div>`;
+  m.innerHTML = `<div class="bg-white rounded-[10px] shadow-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto border border-slate-200">${html}</div>`;
   m.classList.remove("hidden");
   m.classList.add("flex");
   icons();
@@ -122,14 +122,13 @@ function bar(label, n, total, color) {
     <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${color.bar}" style="width:${pct}%"></div></div>
   </div>`;
 }
-// Stat tiles: white cards with a colored dot taken from the tone in cls; dark (ink) tiles stay dark.
-const TILE_DOT = { emerald: "bg-emerald-500", red: "bg-red-500", rose: "bg-rose-500", amber: "bg-amber-500", yellow: "bg-amber-500", orange: "bg-orange-500", blue: "bg-blue-500", sky: "bg-sky-500", indigo: "bg-indigo-500", violet: "bg-violet-500", purple: "bg-purple-500", slate: "bg-slate-400" };
+// Stat cards (after CKSS): label, then a big number in the tone taken from cls.
+const TILE_NUM = { emerald: "text-[#006300]", green: "text-[#006300]", red: "text-[#b42323]", rose: "text-[#b42323]", amber: "text-amber-700", yellow: "text-amber-700", orange: "text-orange-700", blue: "text-depedGold-500", sky: "text-depedGold-500", indigo: "text-indigo-700", violet: "text-violet-700", purple: "text-purple-700", slate: "text-brand-950", brand: "text-depedGold-500" };
 const statTile = (label, n, cls = "") => {
-  const dark = /bg-(brand|slate)-9/.test(cls);
-  const tone = (cls.match(/(?:bg|text|border)-([a-z]+)-d/) || [])[1];
-  return `<div class="rounded-3xl p-5 border shadow-sm ${dark ? "bg-brand-950 text-cream border-brand-950" : "bg-white text-brand-950 border-brand-950/5"}">
-    <div class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] ${dark ? "text-white/55" : "text-slate-500"}"><span class="w-1.5 h-1.5 rounded-full ${dark ? "bg-depedGold-500" : TILE_DOT[tone] || "bg-depedGold-500"}"></span>${label}</div>
-    <div class="tabular mt-3 text-4xl font-bold tracking-[-0.04em] leading-none">${n}</div></div>`;
+  const tone = (cls.match(/(?:bg|text|border)-([a-z]+)-\d/) || [])[1];
+  return `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-[0_1px_2px_rgba(0,0,0,0.05),0_4px_16px_rgba(0,0,0,0.04)] px-5 py-4">
+    <div class="text-sm text-brand-600">${label}</div>
+    <div class="tabular mt-1 text-[1.9rem] font-bold leading-tight ${TILE_NUM[tone] || "text-depedGold-500"}">${n}</div></div>`;
 };
 const BLUE = { text: "text-blue-700", bar: "bg-blue-600" };
 const GREEN = { text: "text-emerald-700", bar: "bg-emerald-500" };
@@ -266,40 +265,51 @@ function render() {
   }
 }
 
+// Shell (after the CKSS Client Portal): dark sidebar with grouped links, white top bar with who is signed in.
+let navShown = "";
 function renderHeader() {
+  const side = $("#sidebar");
   const box = $("#userbox");
-  const tabs = $("#tabs");
-  if (!state.user) { box.innerHTML = ""; tabs.classList.add("hidden"); return; }
-  const role = state.role === "admin"
-    ? `<span class="px-2 py-0.5 rounded-full bg-depedGold-500 text-brand-950 font-bold text-[10px] uppercase tracking-wider">Admin</span>`
-    : state.role === "awardee"
-      ? `<span class="px-2 py-0.5 rounded-full bg-white/15 border border-white/20 text-white font-bold text-[10px] uppercase tracking-wider">Awardee</span>`
-      : "";
-  const duties = state.perms && !state.perms.admin
-    ? PERM_LABELS.filter(([k]) => state.perms[k]).map(([, t]) => `<span class="hidden md:inline px-2 py-0.5 rounded-full bg-depedGold-500/20 border border-depedGold-500/40 text-depedGold-400 font-bold text-[10px] uppercase tracking-wider">${t}</span>`).join("")
-    : "";
-  box.innerHTML = `${role}${duties}
-    <button data-act="profile" title="My profile" class="hidden sm:inline text-slate-200 hover:text-white hover:underline max-w-[200px] truncate">${esc(myName())}</button>
-    <button data-act="signout" class="no-print inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white px-3 py-1.5 rounded-lg font-medium transition">
-      <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Sign out</button>`;
+  document.body.classList.toggle("signed-out", !state.user);
+  if (!state.user) { side.innerHTML = ""; box.innerHTML = ""; navShown = ""; return; }
 
-  if (!state.role) { tabs.classList.add("hidden"); return; }
-  const items = state.role === "admin"
-    ? [["main", "Applicants", "users"]]
-    : [["home", "Home", "house"], ["main", "My Award", "award"]];
-  if (state.perms) items.push(["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"]);
-  items.push(["guide", "Guidelines", "book-open"]);
-  tabs.classList.remove("hidden");
-  tabs.firstElementChild.innerHTML = items.map(([id, label, icon]) => {
-    const on = state.tab === id;
-    return `<button data-act="tab" data-tab="${id}" class="group relative inline-flex items-center gap-2 px-4 py-3.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] whitespace-nowrap transition-colors duration-300 ${on ? "text-brand-950" : "text-slate-500 hover:text-brand-950"}">
-      <span class="w-1.5 h-1.5 rounded-full bg-depedGold-500 transition-transform duration-300 ${on ? "scale-100 shadow-[0_0_10px_#ff4d2e]" : "scale-0 group-hover:scale-100"}"></span>${label}
-      <span class="absolute left-4 right-4 bottom-0 h-px bg-brand-950 origin-left transition-transform duration-500 ${on ? "scale-x-100" : "scale-x-0"}"></span></button>`;
-  }).join("");
+  const roleName = state.role === "admin" ? "Admin" : state.perms ? PERM_LABELS.filter(([k]) => state.perms[k]).map(([, t]) => t).join(" · ") || "Awardee" : "Awardee";
+  const dept = (state.me && state.me.position) || (state.profile && state.profile.position) || "";
+  box.innerHTML = `<button data-act="profile" title="My profile" class="text-right leading-tight hover:opacity-80 max-w-[60vw] sm:max-w-xs">
+      <div class="font-semibold text-sm truncate">${esc(myName())}</div>
+      <div class="text-xs text-brand-500 truncate">${esc(roleName)}${dept ? " · " + esc(dept) : ""} · San Vicente NHS</div></button>
+    ${state.role === "admin" ? `<span class="hidden sm:inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-depedGold-500 border border-blue-200">PRAISE Committee</span>` : ""}
+    <button data-act="tab" data-tab="guide" class="${btnLight} hidden sm:inline-flex">Guidelines</button>
+    <button data-act="signout" class="${btnLight}">Sign out</button>`;
+
+  const groups = [];
+  if (state.role) {
+    groups.push(["", state.role === "admin"
+      ? [["main", "Applicants", "users"]]
+      : [["home", "Choose award", "layout-list"], ["main", "My Award", "award"]]]);
+    if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"]]]);
+    groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
+  }
+  let i = 0;
+  side.innerHTML = `<a href="./" data-act="home" title="Go to home page" class="flex items-center gap-2.5 lg:px-1.5 mr-auto lg:mr-0 min-w-0">
+      <img src="logo.png" alt="BLESS seal" class="w-9 h-9 rounded-full bg-white p-0.5 flex-shrink-0">
+      <span class="min-w-0 leading-tight"><span class="block text-white font-semibold text-[0.95rem] truncate">San Vicente NHS</span>
+        <span class="ld-kicker !text-[0.66rem] text-[#7d8590]">BLESS PRAISE Portal</span></span></a>
+    <nav class="flex flex-wrap lg:flex-col gap-0.5 w-full lg:w-auto">${groups.map(([label, items]) => `
+      ${label ? `<div class="hidden lg:block ld-kicker text-[#7d8590] px-2.5 pt-3 pb-1">${label}</div>` : ""}
+      ${items.map(([id, text, icon]) => `<button data-act="tab" data-tab="${id}" style="--i:${i++}" class="nav-btn ${state.tab === id || (id === "main" && state.role === "admin" && state.tab === "home") ? "active" : ""} flex items-center gap-2.5 px-2.5 py-2 rounded-[7px] text-[0.92rem] text-left transition-colors">
+        <i data-lucide="${icon}" class="w-[17px] h-[17px] opacity-85 flex-shrink-0"></i>${text}</button>`).join("")}`).join("")}
+    </nav>`;
+  // Nav slides in once per sign-in.
+  const key = state.user.uid + "|" + state.role;
+  if (state.role && key !== navShown) {
+    navShown = key;
+    side.classList.remove("nav-enter"); void side.offsetWidth; side.classList.add("nav-enter");
+  }
 }
 
 function renderSetup() {
-  main.innerHTML = `<div class="max-w-xl mx-auto bg-white rounded-2xl border border-amber-300 shadow-sm p-6">
+  main.innerHTML = `<div class="max-w-xl mx-auto bg-white rounded-[10px] border border-amber-300 shadow-sm p-6">
     <div class="text-xs font-bold uppercase tracking-wider text-amber-700">Setup needed</div>
     <h2 class="text-xl font-bold text-slate-900 mt-1">Connect Firebase</h2>
     <p class="text-sm text-slate-600 mt-2">Paste your Firebase config into <code class="px-1.5 py-0.5 rounded bg-slate-100 text-brand-900 font-semibold">firebase-config.js</code>.
@@ -316,7 +326,7 @@ function field(id, label, type = "text", extra = "") {
 let heroPlayed = false;
 function renderAuth() {
   const mode = state.authMode;
-  const tab = (m, label) => `<button type="button" data-act="auth-mode" data-mode="${m}" class="flex-1 py-2 text-sm font-semibold rounded-full transition duration-300 ${mode === m ? "bg-brand-950 text-white shadow-sm" : "text-slate-500 hover:text-brand-950"}">${label}</button>`;
+  const tab = (m, label) => `<button type="button" data-act="auth-mode" data-mode="${m}" class="flex-1 py-1.5 text-sm font-semibold rounded-md transition ${mode === m ? "bg-white/10 text-white" : "text-[#8b94a4] hover:text-white"}">${label}</button>`;
   let body;
   if (mode === "signup") {
     body = `${field("su-name", "Full name", "text", 'required maxlength="120" placeholder="Juan Dela Cruz" autocomplete="name"')}
@@ -327,80 +337,48 @@ function renderAuth() {
         <div class="grid grid-cols-2 gap-1.5">${subjectChecks("su-subject", [])}</div></div>
       ${field("su-email", "Email", "email", 'required autocomplete="email" placeholder="name@deped.gov.ph"')}
       ${field("su-pass", "Password", "password", 'required minlength="6" autocomplete="new-password"')}
-      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Create account</button>`;
+      <button class="w-full py-2.5 mt-1 rounded-lg bg-[#5598e7] hover:brightness-110 text-[#07090d] text-sm font-semibold transition">Create account</button>`;
   } else if (mode === "reset") {
     body = `<p class="text-sm text-slate-600">We'll email you a link to set a new password.</p>
       ${field("rs-email", "Email", "email", 'required autocomplete="email"')}
-      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Send reset link</button>
-      <button type="button" data-act="auth-mode" data-mode="login" class="w-full text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Back to sign in</button>`;
+      <button class="w-full py-2.5 mt-1 rounded-lg bg-[#5598e7] hover:brightness-110 text-[#07090d] text-sm font-semibold transition">Send reset link</button>
+      <button type="button" data-act="auth-mode" data-mode="login" class="w-full text-xs font-semibold text-depedGold-500 hover:underline">Back to sign in</button>`;
   } else {
     body = `${field("li-email", "Email", "email", 'required autocomplete="email"')}
       ${field("li-pass", "Password", "password", 'required autocomplete="current-password"')}
-      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Sign in</button>
-      <button type="button" data-act="auth-mode" data-mode="reset" class="w-full text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Forgot password?</button>`;
+      <button class="w-full py-2.5 mt-1 rounded-lg bg-[#5598e7] hover:brightness-110 text-[#07090d] text-sm font-semibold transition">Sign in</button>
+      <button type="button" data-act="auth-mode" data-mode="reset" class="w-full text-xs font-semibold text-depedGold-500 hover:underline">Forgot password?</button>`;
   }
-  // Sign-in page: dark intro with the constellation, headline words blurring in (first visit only),
-  // then a marquee of the awards and how it works.
+  // Sign-in (after the CKSS Client Portal): dark stage with the network animation, headline on the left,
+  // a glassy sign-in card on the right. The headline animation plays on the first visit only.
   const played = heroPlayed;
   heroPlayed = true;
-  const words = (list, start) => list.map(([t, cls], i) => `<span class="ld-word ${cls || ""}" style="--i:${start + i}">${t}</span>`).join(" ");
-  const awards = AWARD_GROUPS.flatMap((g) => g.keys);
-  const award = (k) => `<span class="inline-flex items-center gap-3 px-7 text-xl sm:text-2xl font-bold tracking-tight whitespace-nowrap text-brand-950/30 hover:text-brand-950 transition-colors duration-300">
-    <span class="material-icons !text-[26px] text-depedGold-500/70">${AWARD_STYLE[k].icon}</span>${esc(awardName(k).name)}</span>`;
-  const steps = [
-    ["award", "Choose your award", "13 categories for teaching, non-teaching and special awards. General MOVs are added for you."],
-    ["link", "Link your MOVs", "Paste a Google Drive link for each requirement. Save as you go and submit when all are in."],
-    ["badge-check", "Get verified", "The PRAISE Committee checks every MOV. Watch for Verified badges and remarks."],
-    ["clipboard-check", "Monitor and report", "HR, the School Clinic and Head / Master Teachers track attendance, AOR and DLLs, then print reports."]
-  ];
   main.innerHTML = `
-    <section class="ld-hero ${played ? "ld-played" : ""} relative -mt-6 w-screen ml-[calc(50%-50vw)] text-cream overflow-hidden">
+    <section class="ld-hero ${played ? "ld-played" : ""} relative min-h-screen overflow-hidden text-[#e9eef6]">
       <canvas id="ld-canvas" class="absolute inset-0 w-full h-full" aria-hidden="true"></canvas>
-      <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-14 lg:py-20 grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center lg:min-h-[calc(100vh-68px)]">
-        <div class="lg:col-span-7">
-          <div class="ld-kicker ld-fade text-white/60" style="--d:.1s">BLESS PRAISE Portal · San Vicente NHS</div>
-          <h2 class="mt-5 font-bold leading-[0.95] tracking-[-0.045em] text-[clamp(2.9rem,7.2vw,6.2rem)]">
-            ${words([["Excellence"], ["isn’t"], ["luck."]], 0)}<br>${words([["it’s", "text-white/35"], ["process."]], 3)}
+      <div class="relative z-10 min-h-screen max-w-[1280px] mx-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,420px)] gap-7 lg:gap-24 items-center content-center px-4 sm:px-[6vw] py-14 lg:py-16">
+        <div>
+          <div class="ld-fade inline-flex items-center gap-3 bg-white rounded-xl px-3 py-2 shadow-lg" style="--d:.05s">
+            <img src="logo.png" alt="BLESS seal" class="w-11 h-11 rounded-full">
+            <span class="leading-tight text-brand-950"><span class="block font-bold text-[0.95rem]">San Vicente NHS</span><span class="block text-[11px] text-brand-500">DepEd Region XI · SDO Panabo City</span></span>
+          </div>
+          <div class="ld-fade ld-kicker mt-3 text-[#b3bccb]" style="--d:.15s">BLESS PRAISE Portal</div>
+          <h2 class="mt-5 font-bold leading-[1.02] tracking-[-0.035em] text-white text-[clamp(2.6rem,6.4vw,5.6rem)]">
+            <span class="ld-word" style="--i:0"><span>Excellence</span></span><br><span class="ld-word" style="--i:1"><span class="ld-grad">isn’t luck.</span></span>
           </h2>
-          <p class="ld-fade mt-6 max-w-md text-base sm:text-lg leading-relaxed text-white/60" style="--d:.85s">Choose your award. Track your <span class="text-white">MOVs</span>. Get <span class="text-depedGold-400">verified</span>, with attendance, AOR and lesson-log monitoring in one place.</p>
-          <div class="ld-fade hidden lg:flex items-center gap-3 mt-12 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-white/40" style="--d:1.15s"><span class="ld-bob text-base text-depedGold-500">↓</span>Scroll</div>
+          <p class="ld-fade mt-5 max-w-[30rem] text-[#b3bccb] text-[clamp(0.98rem,1.4vw,1.12rem)] leading-relaxed" style="--d:.8s">Every MOV linked. Every award verified. Attendance, AOR and lesson logs monitored in one place.</p>
         </div>
-        <div class="lg:col-span-5 ld-fade" style="--d:.55s">
-          <div class="bg-white text-slate-800 rounded-3xl shadow-2xl shadow-black/50 p-5 sm:p-7">
-            <div class="flex items-center justify-between mb-5">
-              <div class="ld-kicker text-slate-500">${mode === "signup" ? "Create account" : mode === "reset" ? "Reset password" : "Welcome back"}</div>
-              <span class="font-mono text-[10px] text-slate-400">SVNHS</span>
-            </div>
-            ${mode === "reset" ? "" : `<div class="flex p-1 bg-cream rounded-full mb-5">${tab("login", "Sign in")}${tab("signup", "Create account")}</div>`}
+        <div class="ld-fade ld-auth lg:justify-self-end w-full max-w-none lg:max-w-[420px]" style="--d:.45s">
+          <div class="rounded-[10px] border border-white/10 bg-[rgba(17,21,29,0.78)] backdrop-blur-xl shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8 max-h-[calc(100dvh-2rem)] overflow-y-auto">
+            <h1 class="text-2xl font-bold text-white">${mode === "signup" ? "Create account" : mode === "reset" ? "Reset password" : "Sign in"}</h1>
+            <p class="text-sm text-[#b3bccb] mt-1 mb-5">BLESS PRAISE Portal</p>
+            ${mode === "reset" ? "" : `<div class="flex p-1 bg-black/30 border border-white/10 rounded-lg mb-5">${tab("login", "Sign in")}${tab("signup", "Create account")}</div>`}
             <form id="auth-form" data-mode="${mode}" class="space-y-3" novalidate>
-              <div id="auth-error" class="hidden text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+              <div id="auth-error" class="hidden text-xs font-semibold text-[#ff7b7b] bg-red-500/10 border border-red-400/30 rounded-lg px-3 py-2"></div>
               ${body}
             </form>
           </div>
         </div>
-      </div>
-    </section>
-
-    <section class="w-screen ml-[calc(50%-50vw)] border-b border-brand-950/10 py-10">
-      <div class="flex justify-center mb-6"><div class="ld-kicker text-slate-500">${awards.length} awards · one standard</div></div>
-      <div class="ld-marquee overflow-hidden"><div class="ld-track">${awards.map(award).join("")}${awards.map(award).join("")}</div></div>
-    </section>
-
-    <section class="py-16 sm:py-24">
-      <div data-reveal="how-head" class="max-w-3xl mx-auto text-center">
-        <div class="ld-kicker text-slate-500">How it works</div>
-        <h3 class="mt-4 text-[clamp(2.4rem,5.5vw,4.5rem)] font-bold tracking-[-0.045em] leading-[0.95] text-brand-950">Behind every award.<br><span class="text-brand-950/30">Ahead of every review.</span></h3>
-      </div>
-      <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        ${steps.map(([icon, title, text], i) => `<div data-reveal="how-${i}" style="transition-delay:${i * 0.12}s">
-          <div class="ld-card group h-full bg-white rounded-3xl p-6 border border-brand-950/5 shadow-sm hover:bg-brand-950 hover:text-cream">
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-xs font-bold text-depedGold-500">0${i + 1}</span>
-              <span class="w-11 h-11 rounded-full bg-cream group-hover:bg-white/10 flex items-center justify-center transition-colors duration-500"><i data-lucide="${icon}" class="w-5 h-5 text-depedGold-500"></i></span>
-            </div>
-            <div class="mt-12 text-2xl font-bold tracking-tight leading-tight">${title}</div>
-            <p class="mt-2 text-sm text-slate-500 group-hover:text-white/60 transition-colors duration-500">${text}</p>
-          </div></div>`).join("")}
       </div>
     </section>`;
 }
@@ -449,14 +427,14 @@ async function handleAuthSubmit(form) {
 
 function renderVerify() {
   main.innerHTML = `<div class="max-w-md mx-auto py-4">
-    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 text-center">
+    <div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-6 text-center">
       <div class="w-12 h-12 rounded-full bg-blue-50 text-blue-700 flex items-center justify-center mx-auto mb-3"><i data-lucide="mail-check" class="w-6 h-6"></i></div>
       <h2 class="text-lg font-bold text-slate-900">Verify your email</h2>
       <p class="text-sm text-slate-600 mt-1">We sent a link to <strong class="text-brand-900">${esc(state.user.email)}</strong>.<br>Open it, then tap <strong>Continue</strong>.</p>
       <p class="text-xs text-amber-700 mt-2">Not there? Check <strong>Spam</strong>.</p>
       <div class="mt-5 flex flex-col gap-2">
-        <button data-act="verify-continue" class="py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300">Continue</button>
-        <button data-act="verify-resend" class="py-2 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Resend link</button>
+        <button data-act="verify-continue" class="py-3 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors">Continue</button>
+        <button data-act="verify-resend" class="py-2 text-xs font-semibold text-depedGold-500 hover:underline">Resend link</button>
       </div>
     </div>
   </div>`;
@@ -481,42 +459,39 @@ const AWARD_STYLE = {
   "cat-special-2": { icon: "military_tech" }
 };
 
+// Awards are a list inside a card per group (after CKSS's action-item lists), not tiles.
 function renderPicker() {
   const app = state.app;
   const locked = !!(app && app.submittedAt);
   main.innerHTML = `${profileBar()}${staffBar()}
-    <div class="flex flex-wrap items-end justify-between gap-4 pb-5 mb-8 border-b border-brand-950/10">
-      <div>
-        <div class="ld-kicker text-slate-500">General MOVs (${CATEGORIES[GENERAL].items.length}) are included automatically</div>
-        <h2 class="mt-2 text-[clamp(2.2rem,5vw,3.75rem)] font-bold tracking-[-0.045em] leading-[0.95] text-brand-950">Choose your award.</h2>
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div class="min-w-0">
+        <h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">Choose your award</h2>
+        <p class="mt-1 text-[0.92rem] text-brand-600">${AWARD_GROUPS.reduce((n, g) => n + g.keys.length, 0)} awards. The ${CATEGORIES[GENERAL].items.length} General MOVs are included automatically.</p>
       </div>
       ${app ? `<button data-act="go-award" class="${btnDark}">My Award<i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : ""}
     </div>
-    ${locked ? `<div class="mb-6 text-sm font-semibold text-amber-900 bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3">Your award is locked because you already submitted.</div>` : ""}
-    <div class="space-y-10">
-      ${AWARD_GROUPS.map((g) => `<section>
-          <h3 class="ld-kicker text-slate-500 mb-4">${g.name}</h3>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            ${g.keys.map((k, i) => {
-              const a = awardName(k);
-              const current = app && app.award === k;
-              const n = CATEGORIES[k].items.length;
-              return `<button data-act="pick" data-key="${k}" title="${esc(a.local || a.name)} · ${n} MOVs"
-                class="ld-card group relative text-left flex flex-col min-h-[13rem] rounded-3xl p-6 border shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-depedGold-400 ${current ? "bg-brand-950 text-cream border-brand-950" : "bg-white text-brand-950 border-brand-950/5 hover:bg-brand-950 hover:text-cream"} ${locked && !current ? "opacity-50" : ""}">
-                <span class="flex items-center justify-between">
-                  <span class="font-mono text-xs font-bold text-depedGold-500">${String(i + 1).padStart(2, "0")}</span>
-                  ${current ? `<span class="font-mono text-[10px] font-bold uppercase tracking-[0.14em] px-2.5 py-1 rounded-full bg-depedGold-500 text-white">Current</span>` : ""}
-                  <span class="w-12 h-12 rounded-full flex items-center justify-center transition-colors duration-500 ${current ? "bg-white/10" : "bg-cream group-hover:bg-white/10"}"><span class="material-icons !text-[26px] text-depedGold-500">${AWARD_STYLE[k].icon}</span></span>
-                </span>
-                <span class="mt-auto pt-10 text-xl sm:text-2xl font-bold tracking-tight leading-tight">${esc(a.name)}</span>
-                <span class="mt-2 flex items-center justify-between gap-2 text-sm ${current ? "text-white/55" : "text-slate-500 group-hover:text-white/60"} transition-colors duration-500">
-                  <span>${a.local ? esc(a.local) + " · " : ""}<span class="whitespace-nowrap">${n} MOVs</span></span>
-                  <span class="ld-arrow text-depedGold-500 group-hover:translate-x-1">→</span>
-                </span>
-              </button>`;
-            }).join("")}
-          </div>
-        </section>`).join("")}
+    ${locked ? `<div class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">Your award is locked because you already submitted.</div>` : ""}
+    <div class="space-y-4">
+      ${AWARD_GROUPS.map((g) => panel(`${panelHead(g.name, `<span class="text-sm text-brand-500">${g.keys.length} awards</span>`)}
+        <ul class="px-3 pb-2 divide-y divide-black/10">
+          ${g.keys.map((k) => {
+            const a = awardName(k);
+            const current = app && app.award === k;
+            const n = CATEGORIES[k].items.length;
+            return `<li><button data-act="pick" data-key="${k}" title="${esc(a.local || a.name)} · ${n} MOVs"
+              class="group w-full flex items-center gap-3.5 px-2 py-3 text-left rounded-lg hover:bg-brand-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-500 ${locked && !current ? "opacity-55" : ""}">
+              <span class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${current ? "bg-depedGold-500 text-white" : "bg-blue-50 text-depedGold-500"}"><span class="material-icons !text-[20px]">${AWARD_STYLE[k].icon}</span></span>
+              <span class="flex-1 min-w-0">
+                <span class="flex flex-wrap items-center gap-2"><span class="font-semibold text-brand-950">${esc(a.name)}</span>
+                  ${current ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-depedGold-500 border border-blue-200">Current</span>` : ""}</span>
+                ${a.local ? `<span class="block text-sm text-brand-500 truncate">${esc(a.local)}</span>` : ""}
+              </span>
+              <span class="flex-shrink-0 text-sm text-brand-600 tabular whitespace-nowrap">${n} MOVs</span>
+              <i data-lucide="chevron-right" class="w-4 h-4 text-brand-500 flex-shrink-0 transition-transform group-hover:translate-x-0.5"></i>
+            </button></li>`;
+          }).join("")}
+        </ul>`)).join("")}
     </div>`;
 }
 
@@ -534,7 +509,7 @@ function confirmPick(key) {
   </div>
   <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
     <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">Apply</button>
+    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Apply</button>
   </div>`);
 }
 
@@ -621,7 +596,7 @@ function renderAwardee() {
                 class="flex-1 min-w-0 text-xs px-2.5 py-2 rounded-md border ${bad ? "border-red-400 bg-red-50/40" : dirty ? "border-amber-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500">
               ${editable ? `<button data-act="save-link" data-key="${key}" ${dirty && !bad ? "" : "disabled"}
                 class="flex-shrink-0 px-3.5 py-2 rounded-md text-xs font-bold transition ${dirty && !bad ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm" : "bg-slate-100 text-slate-400 cursor-not-allowed"}">Save</button>` : ""}
-              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Open</a>` : ""}
+              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-depedGold-500 hover:underline">Open</a>` : ""}
             </div>
             <div class="mt-1 text-[11px]">${rowState(key)}</div>
           </div>`;
@@ -637,7 +612,7 @@ function renderAwardee() {
     }
     return `<div class="flex flex-col gap-2 pt-1">
       ${reopened ? `<div class="text-xs font-semibold text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">The committee reopened your application. Fix the links, then resubmit.</div>` : ""}
-      <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-3 rounded-full text-sm font-bold shadow transition ${rd.all ? "bg-depedGold-500 hover:bg-brand-950 text-white transition-colors duration-300" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
+      <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold shadow transition ${rd.all ? "bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
         <i data-lucide="${rd.all ? "send" : "lock"}" class="w-4 h-4"></i>${reopened ? "Resubmit" : "Submit for review"}</button>
       <p class="text-[11px] text-center ${rd.all ? "text-emerald-700 font-semibold" : "text-slate-500"}">${rd.all
         ? `All ${rd.total} MOVs have a link.${rd.unsaved ? ` ${rd.unsaved} unsaved will be saved when you submit.` : ""}`
@@ -648,7 +623,7 @@ function renderAwardee() {
 
   main.innerHTML = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
     <aside class="lg:col-span-4 space-y-4">
-      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+      <div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5 space-y-4">
         <div>
           <div class="text-[11px] font-bold uppercase tracking-wider text-brand-600">${esc(g.name)}</div>
           <h2 class="text-lg font-bold text-slate-900 leading-snug">${esc(a.name)}</h2>
@@ -659,11 +634,11 @@ function renderAwardee() {
         ${bar("Verified", p.ver, p.total, GREEN)}
         ${submitBox()}
       </div>
-      ${review && review.remarks ? `<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+      ${review && review.remarks ? `<div class="rounded-[10px] border border-amber-300 bg-amber-50 p-4">
         <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5"><i data-lucide="message-square" class="w-3.5 h-3.5"></i>Committee remarks</div>
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
       </div>` : ""}
-      <div class="rounded-3xl bg-brand-950 text-cream p-5 text-xs">
+      <div class="rounded-[10px] bg-brand-900 text-[#c9ced6] p-5 text-xs">
         <span class="text-blue-300 font-bold">Saved</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
         <div class="mt-1.5 text-slate-300">Google Drive links only. Set sharing to <strong class="text-white">Anyone with the link</strong>.</div>
       </div>
@@ -696,7 +671,7 @@ function openSubmit() {
   const rd = linkReadiness();
   if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first (${rd.ready}/${rd.total} done).`, "warn");
   const again = !!state.app.submittedAt;
-  openModal(`<div class="bg-brand-950 text-cream px-6 py-5">
+  openModal(`<div class="px-6 pt-5 pb-3 text-brand-950">
       <h3 class="text-base font-bold">${again ? "Resubmit for review" : "Submit for review"}</h3>
       <p class="text-xs text-slate-300">${esc(awardName(state.app.award).name)}</p>
     </div>
@@ -713,7 +688,7 @@ function openSubmit() {
     </div>
     <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
       <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-      <button data-act="do-submit" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">Save all &amp; submit</button>
+      <button data-act="do-submit" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Save all &amp; submit</button>
     </div>`);
 }
 
@@ -754,7 +729,7 @@ function renderAdmin() {
 
   const count = (s) => all.filter((r) => r.st === s).length;
 
-  main.innerHTML = `
+  main.innerHTML = `${pageHead("Applicants", "users", "Every application, its MOV links and the committee’s verification")}
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
       ${statTile("Applicants", all.length, "bg-brand-900 text-white border-brand-950")}
       ${statTile("Awaiting review", count("submitted"), "bg-blue-50 text-blue-900 border-blue-200")}
@@ -782,14 +757,14 @@ function renderAdmin() {
           <th class="text-left font-bold px-4 py-2.5">Status</th>
           <th class="text-right font-bold px-4 py-2.5">Actions</th>
         </tr></thead>
-        <tbody class="divide-y divide-slate-100">
+        <tbody class="divide-y divide-black/10">
           ${rows.map(({ app, st, p }) => `<tr data-act="open" data-uid="${esc(app.uid)}" tabindex="0" class="hover:bg-blue-50/50 cursor-pointer focus:outline-none focus:bg-blue-50">
             <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(app.name)}</div><div class="text-xs text-slate-500">${esc(app.dept) || "—"}</div></td>
             <td class="px-4 py-3 text-xs text-slate-700 max-w-[240px]">${esc(awardName(app.award).name)}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-blue-700">${p.sub}/${p.total}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-emerald-700">${p.ver}/${p.total}</td>
             <td class="px-4 py-3 whitespace-nowrap">${pill(st)}</td>
-            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white transition-colors duration-300"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.uid)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
+            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.uid)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
           </tr>`).join("")}
         </tbody></table></div>`
       : `<div class="p-10 text-center text-sm text-slate-400">${all.length ? "No applicants match these filters." : "No applicants yet. Teachers appear here once they choose an award."}</div>`}
@@ -823,7 +798,7 @@ function renderReview() {
             ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Saved</span>`
             : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Missing</span>`}
           ${url
-            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-depedGold-500 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
             : `<span class="text-xs text-slate-400">No link</span>`}
           <label class="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${ver[key] ? "text-emerald-700" : "text-slate-600"}">
             <input type="checkbox" data-act="verify" data-key="${key}" ${ver[key] ? "checked" : ""} class="w-5 h-5 rounded border-2 border-slate-300 text-emerald-600 focus:ring-emerald-500">Verified</label>
@@ -834,7 +809,7 @@ function renderReview() {
 
   main.innerHTML = `
     <button data-act="back" class="mb-4 inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-900"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i>All applicants</button>
-    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-5 flex flex-wrap items-start justify-between gap-4">
+    <div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5 mb-5 flex flex-wrap items-start justify-between gap-4">
       <div class="min-w-0">
         <h2 class="text-xl font-bold text-slate-900">${esc(app.name)}</h2>
         <div class="text-sm text-slate-500">${esc(app.dept) || "—"}</div>
@@ -842,7 +817,7 @@ function renderReview() {
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
-        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
+        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
         <button data-act="delete" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete application</button>
         ${pill(st)}
         <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} links</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
@@ -857,7 +832,7 @@ function renderReview() {
         ${part(app.award, esc(a.name) + " MOVs")}
       </section>
       <aside class="lg:col-span-4">
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-3 lg:sticky lg:top-28">
+        <div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5 space-y-3 lg:sticky lg:top-28">
           <h3 class="text-sm font-bold uppercase tracking-wide text-slate-800">Committee decision</h3>
           <div class="space-y-2">
             ${DECISIONS.map(([k, label, hint, dot]) => `<label class="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition ${status === k ? "border-2 border-brand-800 bg-brand-50" : "border-slate-200 hover:bg-slate-50"}">
@@ -870,7 +845,7 @@ function renderReview() {
             <label for="remarks" class="block text-xs font-semibold text-slate-700 mb-1">Remarks <span class="font-normal text-slate-400">(the awardee sees this)</span></label>
             <textarea id="remarks" data-act="remarks" rows="4" placeholder="Findings, missing MOVs, deadlines…" class="w-full text-sm p-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 resize-y">${esc(remarks)}</textarea>
           </div>
-          <button data-act="save-decision" class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Save decision</button>
+          <button data-act="save-decision" class="w-full py-2.5 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-semibold transition-colors">Save decision</button>
           ${review.reviewer ? `<p class="text-[11px] text-slate-400">Last saved by ${esc(review.reviewer)} · ${fmtDate(review.reviewedAt)}</p>` : ""}
         </div>
       </aside>
@@ -1427,28 +1402,25 @@ function watchDll() {
 
 // ----- Shared bits -----
 const inputCls = "text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
-const btnDark = "inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-xs font-bold shadow-sm transition-colors duration-300";
-const btnLight = "inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-full border border-brand-950/15 bg-white hover:border-brand-950 text-slate-700 hover:text-brand-950 text-xs font-semibold transition-colors duration-300";
+const btnDark = "inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg border border-depedGold-500 bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-semibold whitespace-nowrap transition-colors";
+const btnLight = "inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg border border-black/20 bg-brand-50 hover:bg-brand-100 text-brand-950 text-sm font-semibold whitespace-nowrap transition-colors";
 const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
 const lbl = (forId, text) => `<label for="${forId}" class="block text-xs font-semibold text-slate-700 mb-1">${text}</label>`;
 const chip = (text, cls) => `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${cls}">${text}</span>`;
-const panel = (inner) => `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">${inner}</div>`;
-const panelHead = (title, right = "") => `<div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-bold text-slate-800">${title}</h3>${right}</div>`;
+const panel = (inner) => `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-[0_1px_2px_rgba(0,0,0,0.05),0_4px_16px_rgba(0,0,0,0.04)] overflow-hidden">${inner}</div>`;
+const panelHead = (title, right = "") => `<div class="px-5 pt-4 pb-3 flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-base font-bold text-brand-950">${title}</h3>${right}</div>`;
 const empty = (msg) => `<div class="p-10 text-center text-sm text-slate-400">${msg}</div>`;
 const table = (heads, rows) => `<div class="overflow-x-auto"><table class="w-full text-sm">
-  <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>${heads.map((h) => `<th class="text-left font-bold px-4 py-2.5 whitespace-nowrap">${h}</th>`).join("")}</tr></thead>
-  <tbody class="divide-y divide-slate-100">${rows.join("")}</tbody></table></div>`;
+  <thead class="text-xs uppercase tracking-[0.04em] text-brand-500 border-b border-black/10"><tr>${heads.map((h) => `<th class="text-left font-semibold px-4 py-2.5 whitespace-nowrap">${h}</th>`).join("")}</tr></thead>
+  <tbody class="divide-y divide-black/10">${rows.join("")}</tbody></table></div>`;
 const selectBox = (id, act, options, value, cls = "") => `<select id="${id}" ${act ? `data-act="${act}"` : ""} class="${inputCls} ${cls}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
 const iconBtn = (act, id, icon, title) => `<button data-act="${act}" data-id="${esc(id)}" title="${title}" class="p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"><i data-lucide="${icon}" class="w-4 h-4"></i></button>`;
 const delBtn = (col, id) => `<button data-act="mon-del" data-col="${col}" data-id="${esc(id)}" title="Delete" class="p-1.5 rounded-md text-red-500 hover:text-red-700 hover:bg-red-50 transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
-const modalHead = (title, sub = "") => `<div class="bg-brand-950 text-cream px-6 py-5"><h3 class="text-lg font-bold tracking-tight">${title}</h3>${sub ? `<p class="mt-0.5 text-xs text-white/55">${sub}</p>` : ""}</div>`;
+const modalHead = (title, sub = "") => `<div class="px-6 pt-5 pb-3"><h3 class="text-lg font-bold text-brand-950">${title}</h3>${sub ? `<p class="mt-0.5 text-sm text-brand-600">${sub}</p>` : ""}</div>`;
 const modalFoot = (act, text, id = "") => `<div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
   <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-  <button data-act="${act}" data-id="${esc(id)}" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">${text}</button></div>`;
-const pageHead = (title, icon, sub) => `<div class="flex items-end justify-between gap-4 pb-5 mb-6 border-b border-brand-950/10">
-  <div class="min-w-0"><div class="ld-kicker text-slate-500">${sub}</div>
-    <h2 class="mt-2 text-[clamp(2rem,4.5vw,3.25rem)] font-bold tracking-[-0.04em] leading-[0.95] text-brand-950">${title}</h2></div>
-  <span class="hidden sm:flex w-12 h-12 rounded-full bg-white border border-brand-950/5 shadow-sm items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5 text-depedGold-500"></i></span></div>`;
+  <button data-act="${act}" data-id="${esc(id)}" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">${text}</button></div>`;
+const pageHead = (title, icon, sub) => `<div class="flex flex-wrap items-start justify-between gap-4 mb-5"><div class="min-w-0"><h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">${title}</h2><p class="mt-1 text-[0.92rem] text-brand-600">${sub}</p></div></div>`;
 
 // ----- Monitoring page -----
 function monViews() {
@@ -1468,7 +1440,7 @@ function renderMonitor() {
   const body = { attendance: monAttendance, aor: monAor, dll: monDll, personnel: monPersonnel, access: monAccess }[state.mon.view]();
   main.innerHTML = `${pageHead("Monitoring", "clipboard-check", "Attendance, AOR (Area of Responsibility) and Daily Lesson Logs")}
     <div class="flex flex-wrap gap-2 mb-5">
-      ${views.map(([id, text, icon]) => `<button data-act="mon-view" data-view="${id}" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-semibold border transition ${state.mon.view === id ? "bg-brand-900 text-white border-brand-950 shadow" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}">
+      ${views.map(([id, text, icon]) => `<button data-act="mon-view" data-view="${id}" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold border transition-colors ${state.mon.view === id ? "bg-brand-50 text-brand-950 border-black/20 shadow-sm" : "text-brand-600 border-transparent hover:bg-brand-100 hover:text-brand-950"}">
         <i data-lucide="${icon}" class="w-4 h-4"></i>${text}</button>`).join("")}
     </div>
     ${body}`;
@@ -1497,8 +1469,8 @@ function attRecord(r) {
 // Attendance has three modes: a daily sheet to tag people, a month grid, and the list of all records.
 function monAttendance() {
   const modes = [["daily", "Daily sheet", "list-checks"], ["month", "Month view", "calendar-days"], ["records", "All records", "list"]];
-  return `<div class="inline-flex flex-wrap p-1 mb-4 bg-white rounded-full border border-brand-950/10">
-      ${modes.map(([k, t, icon]) => `<button data-act="att-mode" data-mode="${k}" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-semibold rounded-full transition-colors duration-300 ${state.mon.attMode === k ? "bg-brand-950 text-cream" : "text-slate-500 hover:text-brand-950"}"><i data-lucide="${icon}" class="w-4 h-4"></i>${t}</button>`).join("")}
+  return `<div class="inline-flex flex-wrap p-1 mb-4 bg-brand-100 rounded-lg border border-black/10">
+      ${modes.map(([k, t, icon]) => `<button data-act="att-mode" data-mode="${k}" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-semibold rounded-md transition-colors ${state.mon.attMode === k ? "bg-brand-50 text-brand-950 shadow-sm" : "text-brand-600 hover:text-brand-950"}"><i data-lucide="${icon}" class="w-4 h-4"></i>${t}</button>`).join("")}
     </div>
     ${{ daily: attDaily, month: attMonth, records: attRecords }[state.mon.attMode]()}`;
 }
@@ -1615,7 +1587,7 @@ function attMonth() {
         ${days.map((d) => `<th class="font-bold px-0 py-1 w-6 text-center ${weekend(d) ? "text-slate-300" : ""}"><div>${"SMTWTFS"[parseDay(d).getDay()]}</div><div class="tabular text-[11px] ${d === today ? "text-blue-700" : "text-slate-700"}">${Number(d.slice(8))}</div></th>`).join("")}
         <th class="font-bold px-2 py-2 text-center text-red-700">Abs</th><th class="font-bold px-2 py-2 text-center text-amber-700">Late</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-100">${people.map((x) => {
+      <tbody class="divide-y divide-black/10">${people.map((x) => {
         const s = sumOf(x);
         return `<tr><td class="sticky left-0 z-10 bg-white px-3 py-1.5"><div class="font-semibold text-slate-900 text-xs whitespace-nowrap">${esc(x.name)}</div><div class="text-[10px] text-slate-500">${PTYPE[x.type]}</div></td>
           ${days.map((d) => cell(x, d)).join("")}
@@ -1819,7 +1791,7 @@ function monAor() {
   const rank = aorRanking(weeks).slice(0, 10);
   const place = (w, k, medal) => (w[k] ? `<span class="font-semibold text-slate-900">${medal} ${esc(w[k])}</span>` : `<span class="text-slate-400">—</span>`);
   return `
-    <div class="rounded-2xl border ${cur ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"} p-4 mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div class="rounded-[10px] border ${cur ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"} p-4 mb-5 flex flex-wrap items-center justify-between gap-3">
       <div>
         <div class="text-[11px] font-bold uppercase tracking-wider ${cur ? "text-emerald-800" : "text-amber-800"}">This week · ${fmtWeek(now)}</div>
         <div class="text-sm font-semibold text-slate-900 mt-0.5">${cur ? PLACES.map(([k, , medal]) => (cur[k] ? `${medal} ${esc(cur[k])}` : "")).filter(Boolean).join(" &nbsp;·&nbsp; ") : "Not rated yet."}</div>
@@ -2166,13 +2138,13 @@ function renderReports() {
     </div>
     <div class="flex flex-wrap gap-1.5">${[["week", "This week"], ["month", "This month"], ["lastmonth", "Last month"], ["sy", "School year"]].map(([id, t]) =>
       `<button data-act="rep-preset" data-k="${k}" data-p="${id}" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600">${t}</button>`).join("")}</div>`;
-  const card = (kind, icon, color, title, text, inner) => `<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col gap-3">
+  const card = (kind, icon, color, title, text, inner) => `<div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5 flex flex-col gap-3">
       <div class="flex items-start gap-3">
         <div class="w-10 h-10 rounded-xl ${color} flex items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
         <div><h3 class="text-base font-bold text-slate-900">${title}</h3><p class="text-xs text-slate-500">${text}</p></div>
       </div>
       ${inner}
-      <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
+      <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-3 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
     </div>`;
   const cards = [];
   if (p.hr) cards.push(card("att", "calendar-x", "bg-red-50 text-red-700", "Attendance and Punctuality",
@@ -2356,7 +2328,7 @@ function renderGuide() {
   const L = (c) => `<span class="text-depedGold-600 font-extrabold">${c}</span>`;
   const objectives = ["Define MOVs per category", "Standardize portfolios", "Speed up validation", "Require authentic evidence",
     "Strengthen accountability", "Support objective decisions", "Improve record-keeping", "Comply with CSC &amp; DepEd"];
-  main.innerHTML = `<div class="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-7">
+  main.innerHTML = `<div class="max-w-4xl mx-auto bg-white rounded-[10px] border border-slate-200 shadow-sm p-6 sm:p-8 space-y-7">
     <div>
       <div class="text-xs font-bold text-depedGold-600 uppercase tracking-widest">DepEd Panabo City</div>
       <h2 class="text-xl sm:text-2xl font-bold text-slate-900 mt-1">Program on Awards and Incentives for Service Excellence</h2>
