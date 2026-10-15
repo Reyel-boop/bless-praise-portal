@@ -142,7 +142,7 @@ const state = {
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
-  perms: null, mon: null, rep: null, request: null, me: null, meLoaded: false,
+  perms: null, mon: null, rep: null, score: null, request: null, me: null, meLoaded: false,
   personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
@@ -165,7 +165,7 @@ async function onUser(u) {
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
-    perms: null, mon: freshMon(), rep: freshRep(), request: null, me: null, meLoaded: false,
+    perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
     personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
@@ -273,6 +273,7 @@ function render() {
   else if (state.tab === "guide") renderGuide();
   else if (state.tab === "monitor" && state.perms) renderMonitor();
   else if (state.tab === "reports" && state.perms) renderReports();
+  else if (state.tab === "scores" && state.perms && state.perms.admin) renderScores();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
   icons();
@@ -310,7 +311,8 @@ function renderHeader() {
     groups.push(["", state.role === "admin"
       ? [["main", "Applicants", "users"]]
       : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
-    if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"]]]);
+    if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"],
+      ...(state.perms.admin ? [["scores", "Scoreboard & awards", "medal"]] : [])]]);
     groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
   }
   let i = 0;
@@ -2260,7 +2262,7 @@ function monPersonnel() {
       ? table(["Name", "Type", "Position", "Subject area / Office", ""], list.map((x) => `<tr>
           <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(x.name)}</div>${x.email ? `<div class="text-xs text-slate-500">${esc(x.email)}</div>` : ""}</td>
           <td class="px-4 py-3 text-xs">${chip(PTYPE[x.type] || "—", x.type === "teaching" ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-emerald-50 text-emerald-800 border-emerald-200")}</td>
-          <td class="px-4 py-3 text-xs text-slate-700">${esc(x.position) || "—"}</td>
+          <td class="px-4 py-3 text-xs text-slate-700">${esc(x.position) || "—"}${x.advisory ? `<div class="text-[11px] text-depedGold-500 mt-0.5">Adviser · ${esc(x.advisory)}</div>` : ""}</td>
           <td class="px-4 py-3 text-xs text-slate-600">${esc(x.subject || x.office) || "—"}</td>
           <td class="px-4 py-3 text-right whitespace-nowrap">${canEditPerson() ? iconBtn("person-edit", x.id, "pencil", "Edit") + delBtn("personnel", x.id) : ""}</td>
         </tr>`))
@@ -2277,6 +2279,10 @@ function openPerson(id) {
       ${field("person-name", "Full name", "text", `value="${esc(x.name)}" maxlength="120"`)}
       ${positionFields("person", position, position ? x.subject || x.office || "" : "")}
       ${x.position && !position ? `<p class="text-[11px] text-amber-700">Was: ${esc(x.position)}. Choose the matching position from the list.</p>` : ""}
+      <div>${lbl("person-advisory", 'Advisory class <span class="font-normal text-slate-400">(class advisers only)</span>')}
+        <input id="person-advisory" list="advisory-rooms" maxlength="80" value="${esc(x.advisory || "")}" placeholder="e.g. Grade 7 – Rosal" class="w-full ${inputCls}">
+        <datalist id="advisory-rooms">${aorRooms().map((r) => `<option value="${esc(r)}"></option>`).join("")}</datalist>
+        <p class="text-[11px] text-slate-500 mt-1">Use the same name the School Clinic uses for the classroom. It links the adviser to the Cleanest Classroom (AOR) results.</p></div>
     </div>
     ${modalFoot("person-save", "Save changes", id)}`);
 }
@@ -2293,6 +2299,7 @@ async function savePerson(id) {
       name: name.slice(0, 120), type, position,
       subject: type === "teaching" && SUBJECTS.includes(dept) ? dept : "",
       office: type === "nonteaching" ? dept : "",
+      advisory: type === "teaching" ? val("person-advisory").replace(/\s+/g, " ").slice(0, 80) : "",
       by: state.user.email, updatedAt: serverTimestamp(), ...demoMark()
     });
     closeModal();
@@ -2300,6 +2307,216 @@ async function savePerson(id) {
   } catch (e) {
     toast(errorText(e), "error");
   }
+}
+
+// ----- Scoreboard & awards (admins) -----
+// Scores (0–100) for a period, from the monitoring records:
+//   Attendance (everyone): 100 − 5 per day absent − 1 per 15 min late − 2 per day without proper uniform.
+//                          Official business / official time does not count as absent.
+//   ILAW (teachers):       weekly check, on time 100 · late 50 · not submitted 0, averaged.
+//   AOR (class advisers):  points of their advisory class in its grade (1st 3 · 2nd 2 · 3rd 1) ÷ the most possible.
+//   Overall:               weighted average of the scores a person has: Attendance 40 · ILAW 40 · AOR 20.
+const SCORE_W = { att: 40, ilaw: 40, aor: 20 };
+const ILAW_PTS = { ontime: 100, late: 50, missing: 0 };
+const NOT_ABSENT = ["Official business / official time"];
+const roomKey = (r) => String(r || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+const aorRooms = () => [...new Set(Object.values(state.aor).flatMap((w) => GRADES.flatMap((g) => PLACES.map(([k]) => (aorGrades(w)[g] || {})[k]).filter(Boolean))))].sort();
+const round1 = (n) => Math.round(n * 10) / 10;
+
+async function loadScores() {
+  const sc = state.score;
+  const key = `${sc.from}|${sc.to}`;
+  if (sc.key === key || sc.loading) return;
+  sc.loading = true;
+  render();
+  try {
+    const get = async (col, field, a, b) => (await getDocs(query(collection(db, col), ...demoOnly(where(field, ">=", a), where(field, "<=", b))))).docs.map((d) => d.data());
+    sc.att = await get("attendance", "date", sc.from, sc.to);
+    sc.ilaw = await get("dll", "week", mondayOf(sc.from), sc.to);
+    sc.key = key;
+  } catch (e) {
+    toast(errorText(e), "error");
+  } finally {
+    sc.loading = false;
+    render();
+  }
+}
+
+function computeScores() {
+  const sc = state.score;
+  const weeks = Object.values(state.aor).filter((w) => isDay(w.week) && w.week >= mondayOf(sc.from) && w.week <= sc.to);
+  return Object.values(state.personnel).map((p) => {
+    const att = (sc.att || []).filter((r) => r.pid === p.id);
+    const absDays = att.filter((r) => r.type === "absent" && !NOT_ABSENT.includes(r.kind)).reduce((n, r) => n + (DURATION[r.duration] || DURATION.whole)[1], 0);
+    const late = att.filter((r) => r.type === "late");
+    const lateMin = late.reduce((n, r) => n + (Number(r.minutes) || 0), 0);
+    const uniform = att.filter((r) => r.type === "uniform").length;
+    const attScore = Math.max(0, 100 - 5 * absDays - Math.ceil(lateMin / 15) - 2 * uniform);
+    let ilaw = null, ilawWeeks = 0;
+    if (p.type === "teaching") {
+      const recs = (sc.ilaw || []).filter((r) => r.pid === p.id && r.week >= mondayOf(sc.from) && r.week <= sc.to && r.status in ILAW_PTS);
+      ilawWeeks = recs.length;
+      if (recs.length) ilaw = recs.reduce((n, r) => n + ILAW_PTS[r.status], 0) / recs.length;
+    }
+    let aor = null, aorPts = 0, aorWeeks = 0, grade = "";
+    if (p.type === "teaching" && p.advisory) {
+      grade = (String(p.advisory).match(/grade\s*(\d{1,2})/i) || [])[1] || "";
+      for (const w of weeks) {
+        const res = aorGrades(w)[grade];
+        if (!res || !res.first) continue;
+        aorWeeks++;
+        PLACES.forEach(([k, , , pts]) => { if (roomKey(res[k]) === roomKey(p.advisory)) aorPts += pts; });
+      }
+      if (aorWeeks) aor = (aorPts / (3 * aorWeeks)) * 100;
+    }
+    const parts = [["att", attScore], ["ilaw", ilaw], ["aor", aor]].filter(([, v]) => v !== null);
+    const overall = parts.reduce((n, [k, v]) => n + SCORE_W[k] * v, 0) / parts.reduce((n, [k]) => n + SCORE_W[k], 0);
+    return { p, absDays, lates: late.length, lateMin, uniform, attScore, ilaw, ilawWeeks, aor, aorPts, aorWeeks, grade, overall,
+      perfect: !absDays && !late.length && !uniform };
+  }).sort((a, b) => b.overall - a.overall || b.attScore - a.attScore || a.lateMin - b.lateMin || byName(a.p, b.p));
+}
+
+function scoreAwards(rows) {
+  const teach = rows.filter((r) => r.p.type === "teaching"), non = rows.filter((r) => r.p.type === "nonteaching");
+  const advisers = rows.filter((r) => r.aor !== null).sort((a, b) => b.aor - a.aor || b.aorPts - a.aorPts || b.overall - a.overall);
+  return {
+    teach: { title: "Best Teaching Personnel Award", icon: "trophy", people: teach.slice(0, 1), why: (r) => `Overall score ${round1(r.overall)}` },
+    non: { title: "Best Non-Teaching Personnel Award", icon: "award", people: non.slice(0, 1), why: (r) => `Overall score ${round1(r.overall)}` },
+    perfect: { title: "Perfect Attendance Award", icon: "calendar-check", people: rows.filter((r) => r.perfect).sort((a, b) => byName(a.p, b.p)), why: () => "No absence, tardiness or uniform record" },
+    adviser: { title: "Best Adviser Award", icon: "sparkles", people: advisers.slice(0, 1), why: (r) => `${esc(r.p.advisory)} · ${r.aorPts} AOR points` }
+  };
+}
+
+function renderScores() {
+  const sc = state.score;
+  const ready = sc.key === `${sc.from}|${sc.to}`;
+  if (!ready && !sc.loading) setTimeout(loadScores, 0);
+  const rows = ready ? computeScores() : [];
+  const aw = scoreAwards(rows);
+  const shown = rows.filter((r) => !sc.ptype || r.p.type === sc.ptype);
+  const presets = [["month", "This month"], ["lastmonth", "Last month"], ["sy", "School year"]];
+  const num = (v, cls = "") => (v === null ? `<span class="text-slate-300">—</span>` : `<span class="tabular font-bold ${cls}">${round1(v)}</span>`);
+  const awardCard = (k) => {
+    const a = aw[k], first = a.people[0];
+    return `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-4 flex flex-col gap-2">
+      <div class="flex items-center gap-2"><span class="w-9 h-9 rounded-lg bg-blue-50 text-depedGold-500 flex items-center justify-center"><i data-lucide="${a.icon}" class="w-5 h-5"></i></span>
+        <h4 class="font-bold text-brand-950 leading-tight">${a.title.replace(" Award", "")}</h4></div>
+      ${first
+        ? (k === "perfect"
+          ? `<div class="text-2xl font-bold text-[#006300] tabular">${a.people.length}</div><div class="text-xs text-slate-600 line-clamp-2">${a.people.slice(0, 4).map((r) => esc(r.p.name)).join(", ")}${a.people.length > 4 ? ` +${a.people.length - 4} more` : ""}</div>`
+          : `<div class="font-semibold text-slate-900">${esc(first.p.name)}</div><div class="text-xs text-slate-600">${a.why(first)}</div>`)
+        : `<div class="text-sm text-slate-400">${ready ? "No one qualifies in this period." : "Loading…"}</div>`}
+      <button data-act="cert" data-k="${k}" ${first ? "" : "disabled"} class="mt-auto ${btnDark} ${first ? "" : "opacity-40 cursor-not-allowed"}"><i data-lucide="file-badge" class="w-4 h-4"></i>${k === "perfect" && a.people.length > 1 ? `Certificates (${a.people.length})` : "Certificate"}</button>
+    </div>`;
+  };
+  main.innerHTML = `${pageHead("Scoreboard & awards", "medal", "Scores from HR attendance, ILAW lesson plans and the AOR cleanest classroom. Generate certificates for the winners.")}
+    <div class="flex flex-wrap items-end gap-2 mb-5">
+      <div>${lbl("score-from", "From")}<input id="score-from" type="date" data-act="score-date" data-i="0" value="${sc.from}" class="${inputCls}"></div>
+      <div>${lbl("score-to", "To")}<input id="score-to" type="date" data-act="score-date" data-i="1" value="${sc.to}" class="${inputCls}"></div>
+      ${presets.map(([id, t]) => `<button data-act="score-preset" data-p="${id}" class="${btnLight}">${t}</button>`).join("")}
+      <span class="text-sm text-slate-500 ml-1">${sc.loading ? "Loading records…" : periodText(sc.from, sc.to)}</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-6">${["teach", "non", "perfect", "adviser"].map(awardCard).join("")}</div>
+    ${panel(panelHead("Scoreboard", `<div class="flex gap-1">${[["", "All"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]].map(([v, t]) => `<button data-act="score-filter" data-v="${v}" class="px-3 py-1 rounded-lg text-sm font-semibold border ${sc.ptype === v ? "bg-depedGold-500 text-white border-depedGold-500" : "border-black/10 text-brand-600 hover:bg-brand-100"}">${t}</button>`).join("")}</div>`)
+      + (shown.length ? table(["#", "Personnel", "Attendance", "ILAW", "AOR (adviser)", "Overall"], shown.map((r, i) => `<tr>
+          <td class="px-4 py-3 tabular text-xs font-bold text-slate-500">${i + 1}</td>
+          <td class="px-4 py-3"><div class="font-semibold text-slate-900 flex items-center gap-1.5">${esc(r.p.name)}${r.perfect ? `<span title="Perfect attendance" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-[#006300] border border-emerald-200">Perfect</span>` : ""}</div>
+            <div class="text-xs text-slate-500">${esc(r.p.position || PTYPE[r.p.type] || "")}${r.p.subject ? ` · ${esc(r.p.subject)}` : ""}</div></td>
+          <td class="px-4 py-3">${num(r.attScore)}<div class="text-[11px] text-slate-500 whitespace-nowrap">${[r.absDays ? `${r.absDays} day${r.absDays === 1 ? "" : "s"} absent` : "", r.lates ? `${fmtMins(r.lateMin)} late` : "", r.uniform ? `${r.uniform} no uniform` : ""].filter(Boolean).join(" · ") || "Clean record"}</div></td>
+          <td class="px-4 py-3">${num(r.ilaw)}${r.p.type === "teaching" ? `<div class="text-[11px] text-slate-500">${r.ilawWeeks} week${r.ilawWeeks === 1 ? "" : "s"}</div>` : ""}</td>
+          <td class="px-4 py-3">${num(r.aor)}${r.p.advisory ? `<div class="text-[11px] text-slate-500 whitespace-nowrap">${esc(r.p.advisory)} · ${r.aorPts} pts</div>` : ""}</td>
+          <td class="px-4 py-3 text-base">${num(r.overall, "text-depedGold-500")}</td>
+        </tr>`)) : empty(ready ? "No personnel yet." : "Loading scores…")))}
+    <div class="mt-4 text-xs text-slate-500 leading-relaxed bg-brand-50 border border-black/10 rounded-[10px] p-4">
+      <strong class="text-slate-700">How scores work (0–100).</strong>
+      Attendance: 100 − 5 per day absent − 1 per 15 minutes late − 2 per day without proper uniform (official business is not counted as absent).
+      ILAW: each weekly check, on time 100, late 50, not submitted 0, averaged. AOR: points of the adviser's class in its grade level (1st 3, 2nd 2, 3rd 1) out of the most possible.
+      Overall: Attendance 40%, ILAW 40%, AOR 20%, using only the scores a person has (non-teaching personnel: attendance). Set each adviser's class in Monitoring → Personnel.
+    </div>`;
+}
+
+function openCert(k) {
+  const aw = scoreAwards(computeScores())[k];
+  if (!aw || !aw.people.length) return;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("cert-signers") || "{}"); } catch (e) { saved = {}; }
+  openModal(`${modalHead(aw.title, `${aw.people.length === 1 ? esc(aw.people[0].p.name) : `${aw.people.length} certificates`} · ${periodText(state.score.from, state.score.to)}`)}
+    <div class="p-6 space-y-3">
+      ${field("cert-date", "Date of awarding", "date", `value="${todayIso()}"`)}
+      ${field("cert-head", "School Head", "text", `value="${esc(saved.head || "")}" maxlength="80" placeholder="Full name"`)}
+      ${field("cert-chair", "Chair, PRAISE Committee", "text", `value="${esc(saved.chair || "")}" maxlength="80" placeholder="Full name"`)}
+      <p class="text-[11px] text-slate-500">The certificate opens in a new tab. Print it or save it as PDF (landscape).</p>
+    </div>
+    ${modalFoot("cert-go", "Generate", k)}`);
+}
+
+function generateCerts(k) {
+  const aw = scoreAwards(computeScores())[k];
+  if (!aw || !aw.people.length) return;
+  const signers = { head: val("cert-head"), chair: val("cert-chair") };
+  try { localStorage.setItem("cert-signers", JSON.stringify(signers)); } catch (e) { /* private mode */ }
+  const date = isDay(val("cert-date")) ? val("cert-date") : todayIso();
+  const w = window.open("", "_blank");
+  if (!w) return toast("Allow pop-ups for this site to open the certificate.", "warn");
+  w.document.write(certDoc(aw, k, signers, date));
+  w.document.close();
+  closeModal();
+}
+
+function certDoc(aw, k, signers, date) {
+  const logo = new URL("logo.png", location.href).href;
+  const period = periodText(state.score.from, state.score.to);
+  const given = fmtDay(date, { month: "long", day: "numeric", year: "numeric" });
+  const reason = (r) => ({
+    teach: `for outstanding performance in attendance, punctuality, lesson planning (ILAW) and classroom care, with an overall score of ${round1(r.overall)}`,
+    non: `for exemplary attendance, punctuality and adherence to the school uniform policy, with an overall score of ${round1(r.overall)}`,
+    perfect: "for perfect attendance, with no absence, no tardiness and complete uniform",
+    adviser: `for leading ${esc(r.p.advisory)} as the cleanest classroom of Grade ${r.grade}, earning ${r.aorPts} Area of Responsibility points`
+  }[k]);
+  const page = (r) => `<section class="cert"><div class="frame">
+      <img class="seal" src="${logo}" alt="">
+      <div class="gov">Republic of the Philippines · Department of Education<br>Region XI · Schools Division of Panabo City</div>
+      <div class="school">San Vicente National High School</div>
+      <div class="kind">Certificate of Recognition</div>
+      <div class="to">is proudly presented to</div>
+      <div class="name">${esc(r.p.name)}</div>
+      <div class="pos">${esc(r.p.position || "")}</div>
+      <div class="award">${aw.title}</div>
+      <p class="why">${reason(r)}, for the period ${period}.</p>
+      <p class="given">Given this ${given} at San Vicente National High School, Panabo City.</p>
+      <div class="sigs"><div><div class="line">${esc(signers.chair) || "&nbsp;"}</div><div class="role">Chair, PRAISE Committee</div></div>
+        <div><div class="line">${esc(signers.head) || "&nbsp;"}</div><div class="role">School Head</div></div></div>
+    </div></section>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${aw.title} · ${period}</title><link rel="icon" href="${logo}">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Great+Vibes&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #e2e8f0; font: 14px "Public Sans", system-ui, sans-serif; color: #1e293b; }
+  .toolbar { position: sticky; top: 0; z-index: 5; background: #0d2342; color: #fff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .toolbar button { font: 700 13px "Public Sans", sans-serif; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: #f59e0b; color: #0d2342; }
+  .cert { width: 297mm; height: 210mm; margin: 18px auto; background: #fff; padding: 9mm; box-shadow: 0 4px 24px rgba(15,23,42,.15); page-break-after: always; break-after: page; }
+  .frame { height: 100%; border: 3px solid #b8860b; outline: 1px solid #b8860b; outline-offset: -9px; padding: 12mm 18mm; text-align: center; display: flex; flex-direction: column; align-items: center;
+    background: radial-gradient(ellipse at center, #fffdf6 0%, #fff 70%); }
+  .seal { width: 22mm; height: 22mm; border-radius: 50%; }
+  .gov { margin-top: 3mm; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #475569; line-height: 1.5; }
+  .school { font: 700 20px "Playfair Display", serif; color: #0d2342; margin-top: 1mm; }
+  .kind { font: 700 34px "Playfair Display", serif; color: #b8860b; letter-spacing: .04em; text-transform: uppercase; margin-top: 6mm; }
+  .to { font-style: italic; color: #475569; margin-top: 3mm; }
+  .name { font: 46px "Great Vibes", "Playfair Display", serif; color: #0d2342; margin-top: 2mm; border-bottom: 1px solid #cbd5e1; padding: 0 12mm 1mm; }
+  .pos { font-size: 12px; color: #64748b; margin-top: 1mm; }
+  .award { font: 700 22px "Playfair Display", serif; color: #1e3a8a; margin-top: 4mm; }
+  .why { max-width: 200mm; margin: 3mm auto 0; line-height: 1.55; }
+  .given { margin-top: 2mm; color: #475569; }
+  .sigs { margin-top: auto; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; padding: 0 18mm; }
+  .line { border-bottom: 1px solid #1e293b; font-weight: 700; padding-bottom: 1mm; min-height: 6mm; text-transform: uppercase; }
+  .role { font-size: 12px; color: #475569; margin-top: 1mm; }
+  @media print { body { background: #fff; } .toolbar { display: none; } .cert { margin: 0; box-shadow: none; } }
+</style></head><body>
+<div class="toolbar"><span><b>${aw.title}</b> · ${aw.people.length} certificate${aw.people.length === 1 ? "" : "s"} · ${period}</span><button onclick="window.print()">Print / Save as PDF</button></div>
+${aw.people.map(page).join("\n")}
+</body></html>`;
 }
 
 // ----- Staff access (admins) -----
@@ -2714,6 +2931,10 @@ document.addEventListener("click", async (e) => {
     case "aor-wk": state.mon.aorWeek = addDays(state.mon.aorWeek || mondayOf(todayIso()), Number(el.dataset.step)); render(); break;
     case "aor-wk-now": state.mon.aorWeek = mondayOf(todayIso()); render(); break;
     case "aor-grade": state.mon.aorGrade = el.dataset.g; render(); break;
+    case "score-preset": [state.score.from, state.score.to] = PRESETS[el.dataset.p](); render(); break;
+    case "score-filter": state.score.ptype = el.dataset.v; render(); break;
+    case "cert": openCert(el.dataset.k); break;
+    case "cert-go": generateCerts(el.dataset.id); break;
     case "mon-view":
       if (state.mon.view === "dll" && !dllDiscardOk()) break;
       if (state.mon.view === "dll") state.dllDrafts = {};
@@ -2788,6 +3009,7 @@ document.addEventListener("change", (e) => {
     case "dll-status": (state.dllDrafts[el.dataset.pid] ||= {}).status = el.value; render(); break;
     case "rep-date": state.rep[el.dataset.k][Number(el.dataset.i)] = el.value; break;
     case "rep-type": state.rep.attType = el.value; break;
+    case "score-date": if (isDay(el.value)) { state.score[el.dataset.i === "0" ? "from" : "to"] = el.value; render(); } break;
     case "rep-month": if (/^\d{4}-\d{2}$/.test(el.value)) state.rep.att = monthRange(el.value); break;
     case "rep-subject": state.rep.dllSubject = el.value; break;
   }
