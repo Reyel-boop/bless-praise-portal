@@ -74,11 +74,19 @@ The **Monitoring** and **Reports** tabs appear only for admins and for staff an 
 | **Head / Master Teachers** | **Daily Lesson Log**: each week, mark every teacher in their subject areas *On time*, *Late* or *Not submitted*, with remarks. | Daily Lesson Log |
 | **Admins** | Everything above, plus **Staff access**. | All three |
 
-**Giving access:** an admin opens **Monitoring → Staff access → Add staff**, enters the person's email, and ticks HR, School Clinic and/or
-Head / Master Teacher (with their subject areas). The person creates an account on the site with that same email, then signs in.
+**Getting access:** when creating an account, pick **Sign up as** Human Resource, School Clinic or Head / Master Teacher
+(existing users click **Request Monitoring access** on Home). An admin approves it under **Monitoring → Staff access → Waiting for approval**,
+and the Monitoring tab appears for that person right away. Admins can also **Add staff** directly by email.
 
-**Personnel list:** HR adds names under **Monitoring → Personnel** (paste many names at once, one per line). Give each teacher a
-**subject area**: the Daily Lesson Log lists teachers by subject area. Head / Master Teachers can also add teachers in their own subjects.
+**Attendance (HR):** the **Daily sheet** lists every teaching and non-teaching personnel for a day. Everyone is *Present* unless tagged;
+tap **Absent** (kind of absence, whole/half day, remarks) or **Late** (time in, minutes late, remarks). **Month view** shows the whole month
+per person (A = absent, ½ = half day, L = late); click any day to tag or edit it.
+
+**Personnel list:** everyone who creates an account is on it automatically. When signing up they choose their **Position** from a list
+(Teacher I–VII, Master Teacher, Head Teacher, Administrative Officer/Assistant/Aide, Nurse, Guard…) and their **Subject area** (teaching)
+or **Office** (non-teaching). Teaching vs non-teaching follows from the position, and the Daily Lesson Log lists teachers by subject area.
+Older accounts are asked to choose their position once; anyone can change it by clicking their name in the header. HR can correct entries
+under **Monitoring → Personnel**. Positions and offices are listed in `data.js`.
 
 Subject areas and kinds of absence are listed in `data.js`. If you change the subject areas, also change `subjects()` in `firestore.rules` and publish the rules.
 

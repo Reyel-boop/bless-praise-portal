@@ -253,3 +253,46 @@ export const ABSENCE_KINDS = [
   "Absent without approved leave",
   "Other (see remarks)"
 ];
+
+// Positions people choose from when creating an account. The group decides teaching vs non-teaching.
+const levels = (title, n) => Array.from({ length: n }, (_, i) => `${title} ${["I", "II", "III", "IV", "V", "VI", "VII"][i]}`);
+export const POSITIONS = {
+  teaching: [
+    ...levels("Teacher", 7),
+    ...levels("Master Teacher", 5),
+    ...levels("Head Teacher", 6),
+    ...levels("School Principal", 4),
+    "Other teaching position"
+  ],
+  nonteaching: [
+    ...levels("Administrative Officer", 5),
+    ...levels("Administrative Assistant", 3),
+    ...levels("Administrative Aide", 6),
+    "Accountant",
+    "Disbursing Officer",
+    "Registrar",
+    "Guidance Counselor",
+    "Librarian",
+    "School Nurse",
+    "Security Guard",
+    "Watchman",
+    "Utility Worker",
+    "Driver",
+    "Other non-teaching position"
+  ]
+};
+
+// Offices for non-teaching personnel (teaching personnel pick a subject area instead).
+export const OFFICES = [
+  "Administrative Office",
+  "Human Resource",
+  "Finance / Accounting",
+  "Records / Registrar",
+  "Supply / Property",
+  "School Clinic",
+  "Guidance Office",
+  "Library",
+  "Security",
+  "Maintenance / Utility",
+  "Other office"
+];

@@ -10,7 +10,8 @@ rules_version = '2';
 //
 // Monitoring
 //   monitors/{email}      Staff access: hr, clinic, dll (+ subjects). Admins manage it on the site.
-//   personnel/{id}        Teaching and non-teaching personnel list. HR (Head/Master Teachers: their subjects).
+//   accessRequests/{email} Someone asking for Monitoring access. Admins approve or decline it.
+//   personnel/{id}        Teaching and non-teaching personnel. One per account (ID = uid), made at sign-up; HR can edit.
 //   attendance/{id}       Absences and tardiness. HR only.
 //   aor/{week}            Cleanest classroom per week (week = Monday, YYYY-MM-DD). School Clinic only.
 //   dll/{week}_{pid}      Daily Lesson Log check per teacher per week. Head/Master Teachers, own subjects.
@@ -104,20 +105,38 @@ service cloud.firestore {
         && request.resource.data.subjects is list && request.resource.data.subjects.hasOnly(subjects());
     }
 
+    // Someone asking for Monitoring access (at sign-up or later). Only for their own email;
+    // nothing is granted until an admin approves it into monitors/{email}.
+    match /accessRequests/{email} {
+      allow get: if (signedIn() && request.auth.token.email == email) || isAdmin();
+      allow list: if isAdmin();
+      allow delete: if isAdmin() || (signedIn() && request.auth.token.email == email);
+      allow create, update: if signedIn() && request.auth.token.email == email
+        && request.resource.data.keys().hasOnly(['name', 'email', 'position', 'hr', 'clinic', 'dll', 'subjects', 'createdAt'])
+        && request.resource.data.email == email
+        && str(request.resource.data.name, 120) && str(request.resource.data.position, 120)
+        && request.resource.data.hr is bool && request.resource.data.clinic is bool && request.resource.data.dll is bool
+        && request.resource.data.subjects is list && request.resource.data.subjects.hasOnly(subjects());
+    }
+
     function validPerson() {
       let d = request.resource.data;
-      return d.keys().hasOnly(['name', 'type', 'subject', 'position', 'by', 'createdAt', 'updatedAt'])
+      return d.keys().hasOnly(['name', 'type', 'subject', 'office', 'position', 'email', 'by', 'createdAt', 'updatedAt'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 120
         && d.type in ['teaching', 'nonteaching']
         && (d.subject == '' || d.subject in subjects())
-        && str(d.position, 120);
+        && str(d.get('office', ''), 80)
+        && str(d.position, 120)
+        && str(d.get('email', ''), 200);
     }
-    function dllPerson(d) { return d.type == 'teaching' && mySubject(d.subject); }
+    // Each account keeps its own entry (ID = uid) from sign-up and My profile.
+    function ownPerson(id) {
+      return isOwner(id) && request.resource.data.get('email', '') == request.auth.token.email;
+    }
 
     match /personnel/{id} {
-      allow read: if can('hr') || can('dll');
-      allow create: if validPerson() && (can('hr') || dllPerson(request.resource.data));
-      allow update: if validPerson() && (can('hr') || (dllPerson(request.resource.data) && dllPerson(resource.data)));
+      allow read: if can('hr') || can('dll') || isOwner(id);
+      allow create, update: if validPerson() && (can('hr') || ownPerson(id));
       allow delete: if can('hr');
     }
 

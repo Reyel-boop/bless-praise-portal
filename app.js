@@ -8,7 +8,8 @@ import {
   serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS } from "./data.js";
+import { initFx, enterView, reveal, constellation } from "./fx.js";
+import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES } from "./data.js";
 
 // ---------- Helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -121,7 +122,15 @@ function bar(label, n, total, color) {
     <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${color.bar}" style="width:${pct}%"></div></div>
   </div>`;
 }
-const statTile = (label, n, cls) => `<div class="rounded-xl border p-4 ${cls}"><div class="text-[11px] font-bold uppercase tracking-wider opacity-80">${label}</div><div class="tabular text-2xl font-extrabold mt-0.5">${n}</div></div>`;
+// Stat tiles: white cards with a colored dot taken from the tone in cls; dark (ink) tiles stay dark.
+const TILE_DOT = { emerald: "bg-emerald-500", red: "bg-red-500", rose: "bg-rose-500", amber: "bg-amber-500", yellow: "bg-amber-500", orange: "bg-orange-500", blue: "bg-blue-500", sky: "bg-sky-500", indigo: "bg-indigo-500", violet: "bg-violet-500", purple: "bg-purple-500", slate: "bg-slate-400" };
+const statTile = (label, n, cls = "") => {
+  const dark = /bg-(brand|slate)-9/.test(cls);
+  const tone = (cls.match(/(?:bg|text|border)-([a-z]+)-d/) || [])[1];
+  return `<div class="rounded-3xl p-5 border shadow-sm ${dark ? "bg-brand-950 text-cream border-brand-950" : "bg-white text-brand-950 border-brand-950/5"}">
+    <div class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] ${dark ? "text-white/55" : "text-slate-500"}"><span class="w-1.5 h-1.5 rounded-full ${dark ? "bg-depedGold-500" : TILE_DOT[tone] || "bg-depedGold-500"}"></span>${label}</div>
+    <div class="tabular mt-3 text-4xl font-bold tracking-[-0.04em] leading-none">${n}</div></div>`;
+};
 const BLUE = { text: "text-blue-700", bar: "bg-blue-600" };
 const GREEN = { text: "text-emerald-700", bar: "bg-emerald-500" };
 
@@ -134,12 +143,13 @@ const state = {
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {},
   // Monitoring (see the Monitoring section below)
-  perms: null, mon: null, rep: null,
-  personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, dllDrafts: {}, watches: {}
+  perms: null, mon: null, rep: null, request: null, me: null, meLoaded: false,
+  personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
 
 // ---------- Boot ----------
+initFx();
 const configured = !String(firebaseConfig.apiKey || "").startsWith("PASTE");
 if (!configured) {
   renderSetup();
@@ -156,8 +166,8 @@ async function onUser(u) {
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {},
-    perms: null, mon: freshMon(), rep: freshRep(),
-    personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, dllDrafts: {}, watches: {}
+    perms: null, mon: freshMon(), rep: freshRep(), request: null, me: null, meLoaded: false,
+    personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
   if (!u.emailVerified) return render();
@@ -168,8 +178,33 @@ async function onUser(u) {
   if (state.user !== u) return; // signed out meanwhile
   state.role = isAdmin ? "admin" : "awardee";
   state.perms = perms;
-  state.tab = isAdmin ? "main" : "home";
+  // HR, Clinic and Head / Master Teachers land on Monitoring.
+  state.tab = isAdmin ? "main" : perms ? "monitor" : "home";
   startMonitoring();
+  if (!isAdmin) {
+    // Live: access granted or removed by an admin applies without signing in again.
+    state.unsubs.push(onSnapshot(doc(db, "monitors", u.email), (d) => {
+      const p = permsFrom(d);
+      if (JSON.stringify(p) === JSON.stringify(state.perms)) return;
+      if (p && !state.perms) toast("Monitoring access granted. See the Monitoring tab.");
+      state.perms = p;
+      if (!p && (state.tab === "monitor" || state.tab === "reports")) state.tab = "home";
+      restartMonitoring();
+      render();
+    }, () => {}));
+    // Own personnel entry; older accounts are asked once to choose their position.
+    state.unsubs.push(onSnapshot(doc(db, "personnel", u.uid), (d) => {
+      const first = !state.meLoaded;
+      state.me = d.exists() ? d.data() : null;
+      state.meLoaded = true;
+      if (first && !state.me) openProfile(true);
+      render();
+    }, () => { state.meLoaded = true; }));
+    state.unsubs.push(onSnapshot(doc(db, "accessRequests", u.email), (d) => {
+      state.request = d.exists() ? d.data() : null;
+      render();
+    }, () => {}));
+  }
 
   if (isAdmin) {
     state.unsubs.push(onSnapshot(collection(db, "applications"), (snap) => {
@@ -219,6 +254,11 @@ function render() {
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
   icons();
+  enterView(main, [state.user ? state.user.uid : "", state.user && state.user.emailVerified, state.role, state.loaded, state.tab, state.selected,
+    state.mon && state.mon.view, state.mon && state.mon.attMode].join("|"));
+  reveal(main);
+  const sky = document.getElementById("ld-canvas");
+  if (sky && !sky.dataset.on) { sky.dataset.on = "1"; constellation(sky); }
 
   if (keep) {
     const el = document.getElementById(keep.id);
@@ -239,7 +279,7 @@ function renderHeader() {
     ? PERM_LABELS.filter(([k]) => state.perms[k]).map(([, t]) => `<span class="hidden md:inline px-2 py-0.5 rounded-full bg-depedGold-500/20 border border-depedGold-500/40 text-depedGold-400 font-bold text-[10px] uppercase tracking-wider">${t}</span>`).join("")
     : "";
   box.innerHTML = `${role}${duties}
-    <span class="hidden sm:inline text-slate-200 max-w-[200px] truncate">${esc(myName())}</span>
+    <button data-act="profile" title="My profile" class="hidden sm:inline text-slate-200 hover:text-white hover:underline max-w-[200px] truncate">${esc(myName())}</button>
     <button data-act="signout" class="no-print inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white px-3 py-1.5 rounded-lg font-medium transition">
       <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Sign out</button>`;
 
@@ -252,8 +292,9 @@ function renderHeader() {
   tabs.classList.remove("hidden");
   tabs.firstElementChild.innerHTML = items.map(([id, label, icon]) => {
     const on = state.tab === id;
-    return `<button data-act="tab" data-tab="${id}" class="inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition ${on ? "border-depedGold-500 text-brand-900" : "border-transparent text-slate-500 hover:text-slate-800"}">
-      <i data-lucide="${icon}" class="w-4 h-4"></i>${label}</button>`;
+    return `<button data-act="tab" data-tab="${id}" class="group relative inline-flex items-center gap-2 px-4 py-3.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] whitespace-nowrap transition-colors duration-300 ${on ? "text-brand-950" : "text-slate-500 hover:text-brand-950"}">
+      <span class="w-1.5 h-1.5 rounded-full bg-depedGold-500 transition-transform duration-300 ${on ? "scale-100 shadow-[0_0_10px_#ff4d2e]" : "scale-0 group-hover:scale-100"}"></span>${label}
+      <span class="absolute left-4 right-4 bottom-0 h-px bg-brand-950 origin-left transition-transform duration-500 ${on ? "scale-x-100" : "scale-x-0"}"></span></button>`;
   }).join("");
 }
 
@@ -272,43 +313,96 @@ function field(id, label, type = "text", extra = "") {
     <input id="${id}" name="${id}" type="${type}" ${extra} class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>`;
 }
 
+let heroPlayed = false;
 function renderAuth() {
   const mode = state.authMode;
-  const tab = (m, label) => `<button type="button" data-act="auth-mode" data-mode="${m}" class="flex-1 py-2 text-sm font-semibold rounded-lg transition ${mode === m ? "bg-white text-brand-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}">${label}</button>`;
+  const tab = (m, label) => `<button type="button" data-act="auth-mode" data-mode="${m}" class="flex-1 py-2 text-sm font-semibold rounded-full transition duration-300 ${mode === m ? "bg-brand-950 text-white shadow-sm" : "text-slate-500 hover:text-brand-950"}">${label}</button>`;
   let body;
   if (mode === "signup") {
     body = `${field("su-name", "Full name", "text", 'required maxlength="120" placeholder="Juan Dela Cruz" autocomplete="name"')}
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        ${field("su-position", "Position", "text", 'maxlength="120" placeholder="Teacher III"')}
-        ${field("su-dept", "Department", "text", 'maxlength="120" placeholder="Science Dept"')}
-      </div>
+      ${positionFields("su", "", "")}
+      <div>${lbl("su-role", "Sign up as")}${selectBox("su-role", "su-role", SIGNUP_ROLES.map(([k, t]) => [k, t]), "", "w-full")}
+        <p id="su-role-note" class="hidden text-[11px] text-slate-500 mt-1">An admin approves this before the Monitoring tab opens. You can still apply for an award.</p></div>
+      <div id="su-subjects" class="hidden"><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas you monitor</div>
+        <div class="grid grid-cols-2 gap-1.5">${subjectChecks("su-subject", [])}</div></div>
       ${field("su-email", "Email", "email", 'required autocomplete="email" placeholder="name@deped.gov.ph"')}
       ${field("su-pass", "Password", "password", 'required minlength="6" autocomplete="new-password"')}
-      <button class="w-full py-2.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-sm font-bold shadow transition">Create account</button>`;
+      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Create account</button>`;
   } else if (mode === "reset") {
     body = `<p class="text-sm text-slate-600">We'll email you a link to set a new password.</p>
       ${field("rs-email", "Email", "email", 'required autocomplete="email"')}
-      <button class="w-full py-2.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-sm font-bold shadow transition">Send reset link</button>
-      <button type="button" data-act="auth-mode" data-mode="login" class="w-full text-xs font-semibold text-blue-700 hover:underline">Back to sign in</button>`;
+      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Send reset link</button>
+      <button type="button" data-act="auth-mode" data-mode="login" class="w-full text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Back to sign in</button>`;
   } else {
     body = `${field("li-email", "Email", "email", 'required autocomplete="email"')}
       ${field("li-pass", "Password", "password", 'required autocomplete="current-password"')}
-      <button class="w-full py-2.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-sm font-bold shadow transition">Sign in</button>
-      <button type="button" data-act="auth-mode" data-mode="reset" class="w-full text-xs font-semibold text-blue-700 hover:underline">Forgot password?</button>`;
+      <button class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Sign in</button>
+      <button type="button" data-act="auth-mode" data-mode="reset" class="w-full text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Forgot password?</button>`;
   }
-  main.innerHTML = `<div class="max-w-md mx-auto py-4">
-    <div class="text-center mb-6">
-      <h2 class="font-serif text-3xl font-bold text-brand-900">BLESS PRAISE Portal</h2>
-      <p class="text-sm text-slate-500 mt-1">Choose your award. Track your <span class="font-bold text-blue-700">MOVs</span>. Get <span class="font-bold text-emerald-700">verified</span>.</p>
-    </div>
-    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6">
-      ${mode === "reset" ? "" : `<div class="flex p-1 bg-slate-100 rounded-xl border border-slate-200 mb-5">${tab("login", "Sign in")}${tab("signup", "Create account")}</div>`}
-      <form id="auth-form" data-mode="${mode}" class="space-y-3" novalidate>
-        <div id="auth-error" class="hidden text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
-        ${body}
-      </form>
-    </div>
-  </div>`;
+  // Sign-in page: dark intro with the constellation, headline words blurring in (first visit only),
+  // then a marquee of the awards and how it works.
+  const played = heroPlayed;
+  heroPlayed = true;
+  const words = (list, start) => list.map(([t, cls], i) => `<span class="ld-word ${cls || ""}" style="--i:${start + i}">${t}</span>`).join(" ");
+  const awards = AWARD_GROUPS.flatMap((g) => g.keys);
+  const award = (k) => `<span class="inline-flex items-center gap-3 px-7 text-xl sm:text-2xl font-bold tracking-tight whitespace-nowrap text-brand-950/30 hover:text-brand-950 transition-colors duration-300">
+    <span class="material-icons !text-[26px] text-depedGold-500/70">${AWARD_STYLE[k].icon}</span>${esc(awardName(k).name)}</span>`;
+  const steps = [
+    ["award", "Choose your award", "13 categories for teaching, non-teaching and special awards. General MOVs are added for you."],
+    ["link", "Link your MOVs", "Paste a Google Drive link for each requirement. Save as you go and submit when all are in."],
+    ["badge-check", "Get verified", "The PRAISE Committee checks every MOV. Watch for Verified badges and remarks."],
+    ["clipboard-check", "Monitor and report", "HR, the School Clinic and Head / Master Teachers track attendance, AOR and DLLs, then print reports."]
+  ];
+  main.innerHTML = `
+    <section class="ld-hero ${played ? "ld-played" : ""} relative -mt-6 w-screen ml-[calc(50%-50vw)] text-cream overflow-hidden">
+      <canvas id="ld-canvas" class="absolute inset-0 w-full h-full" aria-hidden="true"></canvas>
+      <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-28 pb-14 lg:py-20 grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center lg:min-h-[calc(100vh-68px)]">
+        <div class="lg:col-span-7">
+          <div class="ld-kicker ld-fade text-white/60" style="--d:.1s">BLESS PRAISE Portal · San Vicente NHS</div>
+          <h2 class="mt-5 font-bold leading-[0.95] tracking-[-0.045em] text-[clamp(2.9rem,7.2vw,6.2rem)]">
+            ${words([["Excellence"], ["isn’t"], ["luck."]], 0)}<br>${words([["it’s", "text-white/35"], ["process."]], 3)}
+          </h2>
+          <p class="ld-fade mt-6 max-w-md text-base sm:text-lg leading-relaxed text-white/60" style="--d:.85s">Choose your award. Track your <span class="text-white">MOVs</span>. Get <span class="text-depedGold-400">verified</span>, with attendance, AOR and lesson-log monitoring in one place.</p>
+          <div class="ld-fade hidden lg:flex items-center gap-3 mt-12 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-white/40" style="--d:1.15s"><span class="ld-bob text-base text-depedGold-500">↓</span>Scroll</div>
+        </div>
+        <div class="lg:col-span-5 ld-fade" style="--d:.55s">
+          <div class="bg-white text-slate-800 rounded-3xl shadow-2xl shadow-black/50 p-5 sm:p-7">
+            <div class="flex items-center justify-between mb-5">
+              <div class="ld-kicker text-slate-500">${mode === "signup" ? "Create account" : mode === "reset" ? "Reset password" : "Welcome back"}</div>
+              <span class="font-mono text-[10px] text-slate-400">SVNHS</span>
+            </div>
+            ${mode === "reset" ? "" : `<div class="flex p-1 bg-cream rounded-full mb-5">${tab("login", "Sign in")}${tab("signup", "Create account")}</div>`}
+            <form id="auth-form" data-mode="${mode}" class="space-y-3" novalidate>
+              <div id="auth-error" class="hidden text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+              ${body}
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="w-screen ml-[calc(50%-50vw)] border-b border-brand-950/10 py-10">
+      <div class="flex justify-center mb-6"><div class="ld-kicker text-slate-500">${awards.length} awards · one standard</div></div>
+      <div class="ld-marquee overflow-hidden"><div class="ld-track">${awards.map(award).join("")}${awards.map(award).join("")}</div></div>
+    </section>
+
+    <section class="py-16 sm:py-24">
+      <div data-reveal="how-head" class="max-w-3xl mx-auto text-center">
+        <div class="ld-kicker text-slate-500">How it works</div>
+        <h3 class="mt-4 text-[clamp(2.4rem,5.5vw,4.5rem)] font-bold tracking-[-0.045em] leading-[0.95] text-brand-950">Behind every award.<br><span class="text-brand-950/30">Ahead of every review.</span></h3>
+      </div>
+      <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        ${steps.map(([icon, title, text], i) => `<div data-reveal="how-${i}" style="transition-delay:${i * 0.12}s">
+          <div class="ld-card group h-full bg-white rounded-3xl p-6 border border-brand-950/5 shadow-sm hover:bg-brand-950 hover:text-cream">
+            <div class="flex items-center justify-between">
+              <span class="font-mono text-xs font-bold text-depedGold-500">0${i + 1}</span>
+              <span class="w-11 h-11 rounded-full bg-cream group-hover:bg-white/10 flex items-center justify-center transition-colors duration-500"><i data-lucide="${icon}" class="w-5 h-5 text-depedGold-500"></i></span>
+            </div>
+            <div class="mt-12 text-2xl font-bold tracking-tight leading-tight">${title}</div>
+            <p class="mt-2 text-sm text-slate-500 group-hover:text-white/60 transition-colors duration-500">${text}</p>
+          </div></div>`).join("")}
+      </div>
+    </section>`;
 }
 
 async function handleAuthSubmit(form) {
@@ -321,11 +415,21 @@ async function handleAuthSubmit(form) {
     if (form.dataset.mode === "signup") {
       const name = v("su-name");
       if (!name) return showErr("Enter your full name.");
+      const position = v("su-position"), dept = v("su-dept");
+      const posErr = positionError(position, dept);
+      if (posErr) return showErr(posErr);
+      const role = v("su-role");
+      const subjects = [...form.querySelectorAll("input[name=su-subject]:checked")].map((i) => i.value);
+      if (role === "dll" && !subjects.length) return showErr("Pick the subject areas you monitor.");
       const cred = await createUserWithEmailAndPassword(auth, v("su-email"), form.querySelector("#su-pass").value);
       await updateProfile(cred.user, { displayName: name });
       await setDoc(doc(db, "users", cred.user.uid), {
-        name, position: v("su-position"), dept: v("su-dept"), email: cred.user.email, createdAt: serverTimestamp()
+        name, position, dept, email: cred.user.email, createdAt: serverTimestamp()
       });
+      // Every account is on the personnel list (attendance, DLL).
+      await savePersonnelEntry(cred.user, name, position, dept);
+      // HR / Clinic / Head-Master Teacher: ask an admin for Monitoring access.
+      if (role) await sendAccessRequest(cred.user.email, name, position, { hr: role === "hr", clinic: role === "clinic", dll: role === "dll", subjects: role === "dll" ? subjects : [] });
       await sendEmailVerification(cred.user);
       render();
     } else if (form.dataset.mode === "reset") {
@@ -351,8 +455,8 @@ function renderVerify() {
       <p class="text-sm text-slate-600 mt-1">We sent a link to <strong class="text-brand-900">${esc(state.user.email)}</strong>.<br>Open it, then tap <strong>Continue</strong>.</p>
       <p class="text-xs text-amber-700 mt-2">Not there? Check <strong>Spam</strong>.</p>
       <div class="mt-5 flex flex-col gap-2">
-        <button data-act="verify-continue" class="py-2.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-sm font-bold shadow transition">Continue</button>
-        <button data-act="verify-resend" class="py-2 text-xs font-semibold text-blue-700 hover:underline">Resend link</button>
+        <button data-act="verify-continue" class="py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300">Continue</button>
+        <button data-act="verify-resend" class="py-2 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Resend link</button>
       </div>
     </div>
   </div>`;
@@ -360,54 +464,55 @@ function renderVerify() {
 
 // ----- Awardee: choose award -----
 
-// Each award is a gradient tile with its own colors and an award-style Material icon (trophy, medal, badge…).
-// Class strings are written out in full so the Tailwind CDN generates them.
+// Each award has an award-style Material icon (trophy, medal, badge…).
 const AWARD_STYLE = {
-  "cat-teach-1": { icon: "emoji_events", tile: "bg-gradient-to-br from-red-500 to-orange-400" },
-  "cat-teach-2": { icon: "military_tech", tile: "bg-gradient-to-br from-violet-500 to-fuchsia-500" },
-  "cat-teach-3": { icon: "workspace_premium", tile: "bg-gradient-to-br from-sky-500 to-blue-700" },
-  "cat-teach-4": { icon: "stars", tile: "bg-gradient-to-br from-indigo-500 to-blue-600" },
-  "cat-teach-5": { icon: "verified", tile: "bg-gradient-to-br from-pink-400 to-pink-600" },
-  "cat-teach-6": { icon: "star", tile: "bg-gradient-to-br from-emerald-500 to-teal-700" },
-  "cat-teach-7": { icon: "local_police", tile: "bg-gradient-to-br from-amber-500 to-orange-600" },
-  "cat-nonteach-1": { icon: "auto_awesome", tile: "bg-gradient-to-br from-cyan-500 to-teal-600" },
-  "cat-nonteach-2": { icon: "diamond", tile: "bg-gradient-to-br from-lime-600 to-green-700" },
-  "cat-nonteach-3": { icon: "verified_user", tile: "bg-gradient-to-br from-rose-500 to-pink-600" },
-  "cat-nonteach-4": { icon: "stars", tile: "bg-gradient-to-br from-orange-500 to-amber-600" },
-  "cat-special-1": { icon: "local_activity", tile: "bg-gradient-to-br from-fuchsia-500 to-purple-700" },
-  "cat-special-2": { icon: "military_tech", tile: "bg-gradient-to-br from-red-600 to-rose-500" }
+  "cat-teach-1": { icon: "emoji_events" },
+  "cat-teach-2": { icon: "military_tech" },
+  "cat-teach-3": { icon: "workspace_premium" },
+  "cat-teach-4": { icon: "stars" },
+  "cat-teach-5": { icon: "verified" },
+  "cat-teach-6": { icon: "star" },
+  "cat-teach-7": { icon: "local_police" },
+  "cat-nonteach-1": { icon: "auto_awesome" },
+  "cat-nonteach-2": { icon: "diamond" },
+  "cat-nonteach-3": { icon: "verified_user" },
+  "cat-nonteach-4": { icon: "stars" },
+  "cat-special-1": { icon: "local_activity" },
+  "cat-special-2": { icon: "military_tech" }
 };
 
 function renderPicker() {
   const app = state.app;
   const locked = !!(app && app.submittedAt);
-  main.innerHTML = `
-    <div class="flex items-center justify-between gap-3 pb-3 mb-6 border-b border-slate-300">
-      <div class="flex items-center gap-3">
-        <span class="material-icons text-sky-500 !text-[40px]">emoji_events</span>
-        <div>
-          <h2 class="text-xl sm:text-2xl text-sky-500 leading-tight">Choose your award</h2>
-          <p class="text-sm text-slate-700"><span class="font-semibold text-blue-700">General MOVs</span> (${CATEGORIES[GENERAL].items.length}) are included automatically.</p>
-        </div>
+  main.innerHTML = `${profileBar()}${staffBar()}
+    <div class="flex flex-wrap items-end justify-between gap-4 pb-5 mb-8 border-b border-brand-950/10">
+      <div>
+        <div class="ld-kicker text-slate-500">General MOVs (${CATEGORIES[GENERAL].items.length}) are included automatically</div>
+        <h2 class="mt-2 text-[clamp(2.2rem,5vw,3.75rem)] font-bold tracking-[-0.045em] leading-[0.95] text-brand-950">Choose your award.</h2>
       </div>
-      ${app ? `<button data-act="go-award" class="flex-shrink-0 inline-flex items-center gap-1 text-sm font-semibold text-blue-700 hover:text-blue-900">My Award<span class="material-icons !text-[18px]">arrow_forward</span></button>` : ""}
+      ${app ? `<button data-act="go-award" class="${btnDark}">My Award<i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : ""}
     </div>
-    ${locked ? `<div class="mb-5 text-sm font-semibold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-2.5">Your award is locked because you already submitted.</div>` : ""}
-    <div class="space-y-7">
+    ${locked ? `<div class="mb-6 text-sm font-semibold text-amber-900 bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3">Your award is locked because you already submitted.</div>` : ""}
+    <div class="space-y-10">
       ${AWARD_GROUPS.map((g) => `<section>
-          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">${g.name}</h3>
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-            ${g.keys.map((k) => {
+          <h3 class="ld-kicker text-slate-500 mb-4">${g.name}</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            ${g.keys.map((k, i) => {
               const a = awardName(k);
               const current = app && app.award === k;
-              const st = AWARD_STYLE[k];
-              return `<button data-act="pick" data-key="${k}" title="${esc(a.local || a.name)} · ${CATEGORIES[k].items.length} MOVs"
-                class="group relative flex flex-col overflow-hidden rounded-md ${st.tile} text-white text-center shadow-sm hover:shadow-lg hover:brightness-105 transition focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-500 ${current ? "ring-4 ring-depedGold-400 ring-offset-2" : ""} ${locked && !current ? "opacity-60" : ""}">
-                ${current ? `<span class="absolute top-2 left-2 text-[11px] font-bold px-2 py-0.5 rounded bg-depedGold-400 text-brand-950">Current</span>` : ""}
-                <span class="flex-1 flex items-center justify-center py-7 sm:py-9">
-                  <span class="material-icons !text-[52px] sm:!text-[60px] transition group-hover:scale-110">${st.icon}</span>
+              const n = CATEGORIES[k].items.length;
+              return `<button data-act="pick" data-key="${k}" title="${esc(a.local || a.name)} · ${n} MOVs"
+                class="ld-card group relative text-left flex flex-col min-h-[13rem] rounded-3xl p-6 border shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-depedGold-400 ${current ? "bg-brand-950 text-cream border-brand-950" : "bg-white text-brand-950 border-brand-950/5 hover:bg-brand-950 hover:text-cream"} ${locked && !current ? "opacity-50" : ""}">
+                <span class="flex items-center justify-between">
+                  <span class="font-mono text-xs font-bold text-depedGold-500">${String(i + 1).padStart(2, "0")}</span>
+                  ${current ? `<span class="font-mono text-[10px] font-bold uppercase tracking-[0.14em] px-2.5 py-1 rounded-full bg-depedGold-500 text-white">Current</span>` : ""}
+                  <span class="w-12 h-12 rounded-full flex items-center justify-center transition-colors duration-500 ${current ? "bg-white/10" : "bg-cream group-hover:bg-white/10"}"><span class="material-icons !text-[26px] text-depedGold-500">${AWARD_STYLE[k].icon}</span></span>
                 </span>
-                <span class="flex items-center justify-center min-h-[2.75rem] bg-black/15 px-2 py-2 text-sm sm:text-base leading-snug">${esc(a.name)}</span>
+                <span class="mt-auto pt-10 text-xl sm:text-2xl font-bold tracking-tight leading-tight">${esc(a.name)}</span>
+                <span class="mt-2 flex items-center justify-between gap-2 text-sm ${current ? "text-white/55" : "text-slate-500 group-hover:text-white/60"} transition-colors duration-500">
+                  <span>${a.local ? esc(a.local) + " · " : ""}<span class="whitespace-nowrap">${n} MOVs</span></span>
+                  <span class="ld-arrow text-depedGold-500 group-hover:translate-x-1">→</span>
+                </span>
               </button>`;
             }).join("")}
           </div>
@@ -429,7 +534,7 @@ function confirmPick(key) {
   </div>
   <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
     <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">Apply</button>
+    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">Apply</button>
   </div>`);
 }
 
@@ -516,7 +621,7 @@ function renderAwardee() {
                 class="flex-1 min-w-0 text-xs px-2.5 py-2 rounded-md border ${bad ? "border-red-400 bg-red-50/40" : dirty ? "border-amber-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500">
               ${editable ? `<button data-act="save-link" data-key="${key}" ${dirty && !bad ? "" : "disabled"}
                 class="flex-shrink-0 px-3.5 py-2 rounded-md text-xs font-bold transition ${dirty && !bad ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm" : "bg-slate-100 text-slate-400 cursor-not-allowed"}">Save</button>` : ""}
-              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-blue-700 hover:underline">Open</a>` : ""}
+              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500">Open</a>` : ""}
             </div>
             <div class="mt-1 text-[11px]">${rowState(key)}</div>
           </div>`;
@@ -532,7 +637,7 @@ function renderAwardee() {
     }
     return `<div class="flex flex-col gap-2 pt-1">
       ${reopened ? `<div class="text-xs font-semibold text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">The committee reopened your application. Fix the links, then resubmit.</div>` : ""}
-      <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold shadow transition ${rd.all ? "bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
+      <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-3 rounded-full text-sm font-bold shadow transition ${rd.all ? "bg-depedGold-500 hover:bg-brand-950 text-white transition-colors duration-300" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
         <i data-lucide="${rd.all ? "send" : "lock"}" class="w-4 h-4"></i>${reopened ? "Resubmit" : "Submit for review"}</button>
       <p class="text-[11px] text-center ${rd.all ? "text-emerald-700 font-semibold" : "text-slate-500"}">${rd.all
         ? `All ${rd.total} MOVs have a link.${rd.unsaved ? ` ${rd.unsaved} unsaved will be saved when you submit.` : ""}`
@@ -558,7 +663,7 @@ function renderAwardee() {
         <div class="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5"><i data-lucide="message-square" class="w-3.5 h-3.5"></i>Committee remarks</div>
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
       </div>` : ""}
-      <div class="rounded-2xl bg-gradient-to-br from-brand-900 to-slate-900 text-white p-4 text-xs">
+      <div class="rounded-3xl bg-brand-950 text-cream p-5 text-xs">
         <span class="text-blue-300 font-bold">Saved</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
         <div class="mt-1.5 text-slate-300">Google Drive links only. Set sharing to <strong class="text-white">Anyone with the link</strong>.</div>
       </div>
@@ -591,7 +696,7 @@ function openSubmit() {
   const rd = linkReadiness();
   if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first (${rd.ready}/${rd.total} done).`, "warn");
   const again = !!state.app.submittedAt;
-  openModal(`<div class="bg-gradient-to-r from-brand-950 to-brand-900 text-white px-6 py-4 border-b-2 border-depedGold-500">
+  openModal(`<div class="bg-brand-950 text-cream px-6 py-5">
       <h3 class="text-base font-bold">${again ? "Resubmit for review" : "Submit for review"}</h3>
       <p class="text-xs text-slate-300">${esc(awardName(state.app.award).name)}</p>
     </div>
@@ -608,7 +713,7 @@ function openSubmit() {
     </div>
     <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
       <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-      <button data-act="do-submit" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">Save all &amp; submit</button>
+      <button data-act="do-submit" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">Save all &amp; submit</button>
     </div>`);
 }
 
@@ -684,7 +789,7 @@ function renderAdmin() {
             <td class="px-4 py-3 tabular text-xs font-bold text-blue-700">${p.sub}/${p.total}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-emerald-700">${p.ver}/${p.total}</td>
             <td class="px-4 py-3 whitespace-nowrap">${pill(st)}</td>
-            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white transition"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.uid)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
+            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white transition-colors duration-300"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.uid)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
           </tr>`).join("")}
         </tbody></table></div>`
       : `<div class="p-10 text-center text-sm text-slate-400">${all.length ? "No applicants match these filters." : "No applicants yet. Teachers appear here once they choose an award."}</div>`}
@@ -718,7 +823,7 @@ function renderReview() {
             ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Saved</span>`
             : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Missing</span>`}
           ${url
-            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-brand-950 underline decoration-depedGold-500/50 underline-offset-4 hover:decoration-depedGold-500"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
             : `<span class="text-xs text-slate-400">No link</span>`}
           <label class="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${ver[key] ? "text-emerald-700" : "text-slate-600"}">
             <input type="checkbox" data-act="verify" data-key="${key}" ${ver[key] ? "checked" : ""} class="w-5 h-5 rounded border-2 border-slate-300 text-emerald-600 focus:ring-emerald-500">Verified</label>
@@ -737,7 +842,7 @@ function renderReview() {
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
-        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950 text-sm font-bold shadow transition"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
+        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
         <button data-act="delete" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete application</button>
         ${pill(st)}
         <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} links</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
@@ -765,7 +870,7 @@ function renderReview() {
             <label for="remarks" class="block text-xs font-semibold text-slate-700 mb-1">Remarks <span class="font-normal text-slate-400">(the awardee sees this)</span></label>
             <textarea id="remarks" data-act="remarks" rows="4" placeholder="Findings, missing MOVs, deadlines…" class="w-full text-sm p-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 resize-y">${esc(remarks)}</textarea>
           </div>
-          <button data-act="save-decision" class="w-full py-2.5 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-sm font-bold shadow transition">Save decision</button>
+          <button data-act="save-decision" class="group w-full py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow transition-colors duration-300">Save decision</button>
           ${review.reviewer ? `<p class="text-[11px] text-slate-400">Last saved by ${esc(review.reviewer)} · ${fmtDate(review.reviewedAt)}</p>` : ""}
         </div>
       </aside>
@@ -1113,22 +1218,176 @@ const PRESETS = {
   sy: () => [schoolYearStart(), todayIso()]
 };
 function freshMon() {
-  return { view: "", month: todayIso().slice(0, 7), week: mondayOf(todayIso()), subject: "", q: "", ptype: "" };
+  return { view: "", attMode: "daily", day: todayIso(), month: todayIso().slice(0, 7), week: mondayOf(todayIso()), subject: "", q: "", ptype: "" };
 }
 function freshRep() {
   return { att: PRESETS.month(), aor: PRESETS.month(), dll: PRESETS.month(), attType: "", dllSubject: "" };
 }
 
+function permsFrom(snap) {
+  if (!snap.exists()) return null;
+  const m = snap.data();
+  const p = { hr: m.hr === true, clinic: m.clinic === true, dll: m.dll === true, subjects: (m.subjects || []).filter((s) => SUBJECTS.includes(s)) };
+  return p.hr || p.clinic || p.dll ? p : null;
+}
 async function loadPerms(email) {
-  try {
-    const snap = await getDoc(doc(db, "monitors", email));
-    if (!snap.exists()) return null;
-    const m = snap.data();
-    const p = { hr: m.hr === true, clinic: m.clinic === true, dll: m.dll === true, subjects: (m.subjects || []).filter((s) => SUBJECTS.includes(s)) };
-    return p.hr || p.clinic || p.dll ? p : null;
-  } catch (e) {
-    return null;
+  try { return permsFrom(await getDoc(doc(db, "monitors", email))); } catch (e) { return null; }
+}
+
+// ----- Asking for Monitoring access (at sign-up, or later from Home) -----
+// The request waits in accessRequests/{email} until an admin approves it under Staff access.
+const SIGNUP_ROLES = [
+  ["", "Teacher / Personnel (apply for an award)"],
+  ["hr", "Human Resource (HR)"],
+  ["clinic", "School Clinic"],
+  ["dll", "Head Teacher / Master Teacher"]
+];
+const subjectChecks = (name, on) => SUBJECTS.map((s) => `<label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+  <input type="checkbox" name="${name}" value="${esc(s)}" ${on.includes(s) ? "checked" : ""} class="w-4 h-4 rounded border-slate-300 text-brand-800">${esc(s)}</label>`).join("");
+// Role checkboxes + subject areas, used by Staff access and by the request form.
+function roleFields(prefix, m) {
+  const check = (value, text, hint) => `<label class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer">
+    <input type="checkbox" name="${prefix}-role" value="${value}" ${m && m[value] ? "checked" : ""} class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-800">
+    <span><span class="block text-sm font-bold text-slate-900">${text}</span><span class="block text-xs text-slate-500">${hint}</span></span></label>`;
+  return `<div class="space-y-2">
+      ${check("hr", "Human Resource", "Attendance of teaching and non-teaching personnel")}
+      ${check("clinic", "School Clinic", "AOR · cleanest classroom per week")}
+      ${check("dll", "Head Teacher / Master Teacher", "Daily Lesson Log for the subject areas below")}
+    </div>
+    <div><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas <span class="font-normal text-slate-400">(Head / Master Teacher only)</span></div>
+      <div class="grid grid-cols-2 gap-1.5">${subjectChecks(`${prefix}-subject`, (m && m.subjects) || [])}</div></div>`;
+}
+function readRoles(prefix) {
+  const on = (v) => !!document.querySelector(`input[name=${prefix}-role][value=${v}]:checked`);
+  const r = { hr: on("hr"), clinic: on("clinic"), dll: on("dll"), subjects: [] };
+  if (!r.hr && !r.clinic && !r.dll) return "Tick at least one kind of access.";
+  if (r.dll) {
+    r.subjects = [...document.querySelectorAll(`input[name=${prefix}-subject]:checked`)].map((i) => i.value);
+    if (!r.subjects.length) return "Pick the subject areas for Head / Master Teacher.";
   }
+  return r;
+}
+const rolesText = (m) => PERM_LABELS.filter(([k]) => m[k]).map(([, t]) => t).join(", ");
+
+// ----- Position (chosen from a list) and the personnel entry every account gets -----
+const positionType = (p) => (POSITIONS.nonteaching.includes(p) ? "nonteaching" : "teaching");
+const needsSubject = (p) => /^(Teacher|Master Teacher|Head Teacher) /.test(p || "");
+const deptLabel = (p) => (!p ? "Subject area / Office" : positionType(p) === "nonteaching" ? "Office" : needsSubject(p) ? "Subject area" : 'Subject area <span class="font-normal text-slate-400">(optional)</span>');
+function deptOptions(p, cur) {
+  if (!p) return `<option value="">Choose your position first</option>`;
+  const list = positionType(p) === "nonteaching" ? OFFICES : SUBJECTS;
+  const first = positionType(p) === "nonteaching" ? "Choose office…" : needsSubject(p) ? "Choose subject area…" : "None";
+  return `<option value="">${first}</option>${list.map((x) => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}`;
+}
+function positionFields(prefix, position, dept) {
+  const group = (k, label) => `<optgroup label="${label}">${POSITIONS[k].map((p) => `<option ${p === position ? "selected" : ""}>${esc(p)}</option>`).join("")}</optgroup>`;
+  return `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div>${lbl(`${prefix}-position`, "Position")}
+      <select id="${prefix}-position" data-act="pick-position" data-prefix="${prefix}" class="w-full ${inputCls}">
+        <option value="">Choose your position…</option>${group("teaching", "Teaching")}${group("nonteaching", "Non-teaching")}
+      </select></div>
+    <div><label id="${prefix}-dept-label" for="${prefix}-dept" class="block text-xs font-semibold text-slate-700 mb-1">${deptLabel(position)}</label>
+      <select id="${prefix}-dept" class="w-full ${inputCls}" ${position ? "" : "disabled"}>${deptOptions(position, dept)}</select></div>
+  </div>`;
+}
+function positionPicked(prefix, p) {
+  const sel = $(`#${prefix}-dept`);
+  sel.innerHTML = deptOptions(p, "");
+  sel.disabled = !p;
+  $(`#${prefix}-dept-label`).innerHTML = deptLabel(p);
+}
+function positionError(position, dept) {
+  if (!position) return "Choose your position.";
+  if (positionType(position) === "nonteaching" && !dept) return "Choose your office.";
+  if (needsSubject(position) && !dept) return "Choose your subject area.";
+  return "";
+}
+function savePersonnelEntry(user, name, position, dept) {
+  const type = positionType(position);
+  return setDoc(doc(db, "personnel", user.uid), {
+    name: String(name).slice(0, 120), type, position,
+    subject: type === "teaching" && SUBJECTS.includes(dept) ? dept : "",
+    office: type === "nonteaching" ? dept : "",
+    email: user.email || "", by: user.email || "", updatedAt: serverTimestamp()
+  }, { merge: true });
+}
+
+// "My profile": opened from the name in the header, and once for older accounts with no position yet.
+function openProfile(first) {
+  const me = state.me || {};
+  const all = [...POSITIONS.teaching, ...POSITIONS.nonteaching];
+  const position = all.includes(me.position) ? me.position : "";
+  openModal(`${modalHead(first ? "Complete your profile" : "My profile", first ? "Choose your current position so you're included in attendance monitoring." : esc(state.user.email))}
+    <div class="p-6 space-y-3">
+      ${field("pf-name", "Full name", "text", `value="${esc(me.name || myName())}" maxlength="120"`)}
+      ${positionFields("pf", position, position ? me.subject || me.office || "" : "")}
+    </div>
+    ${modalFoot("profile-save", "Save")}`);
+}
+async function saveProfile() {
+  const name = val("pf-name").replace(/\s+/g, " ");
+  const position = val("pf-position"), dept = val("pf-dept");
+  if (!name) return toast("Enter your full name.", "warn");
+  const err = positionError(position, dept);
+  if (err) return toast(err, "warn");
+  try {
+    await setDoc(doc(db, "users", state.user.uid), { name, position, dept, email: state.user.email }, { merge: true });
+    await savePersonnelEntry(state.user, name, position, dept);
+    await updateProfile(state.user, { displayName: name });
+    state.profile = { ...(state.profile || {}), name, position, dept };
+    closeModal();
+    toast("Profile saved");
+    render();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+function profileBar() {
+  if (!state.meLoaded || state.me) return "";
+  return `<div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+    <span class="inline-flex items-center gap-2"><i data-lucide="user-round-pen" class="w-4 h-4 text-blue-700"></i>Choose your current position to complete your profile.</span>
+    <button data-act="profile" class="${btnDark}">Complete profile</button></div>`;
+}
+
+function sendAccessRequest(email, name, position, roles) {
+  return setDoc(doc(db, "accessRequests", email), {
+    name: String(name || "").slice(0, 120), email, position: String(position || "").slice(0, 120),
+    hr: roles.hr, clinic: roles.clinic, dll: roles.dll, subjects: roles.subjects, createdAt: serverTimestamp()
+  });
+}
+
+// Shown on Home for people without Monitoring access.
+function staffBar() {
+  if (state.perms) return "";
+  const r = state.request;
+  if (r) {
+    return `<div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+      <span class="inline-flex items-center gap-2"><i data-lucide="hourglass" class="w-4 h-4 text-amber-700"></i>Your request for <strong>${esc(rolesText(r))}</strong> access is waiting for an admin to approve it.</span>
+      <button data-act="req-cancel" class="text-xs font-semibold text-amber-800 hover:underline">Cancel request</button></div>`;
+  }
+  return `<div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+    <span class="inline-flex items-center gap-2"><i data-lucide="clipboard-check" class="w-4 h-4 text-brand-600"></i>Are you HR, the School Clinic, or a Head / Master Teacher?</span>
+    <button data-act="req-open" class="${btnLight}">Request Monitoring access</button></div>`;
+}
+
+function openRequest() {
+  openModal(`${modalHead("Request Monitoring access", "An admin approves this. You keep your award application.")}
+    <div class="p-6 space-y-3">${roleFields("req", null)}</div>
+    ${modalFoot("req-save", "Send request")}`);
+}
+async function saveRequest() {
+  const roles = readRoles("req");
+  if (typeof roles === "string") return toast(roles, "warn");
+  try {
+    await sendAccessRequest(state.user.email, myName(), state.profile && state.profile.position, roles);
+    closeModal();
+    toast("Request sent. You'll get the Monitoring tab once an admin approves it.");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+async function cancelRequest() {
+  try { await deleteDoc(doc(db, "accessRequests", state.user.email)); toast("Request cancelled"); } catch (e) { toast(errorText(e), "error"); }
 }
 
 // Live listeners, replaced when the month / week changes and dropped on sign-out.
@@ -1147,8 +1406,14 @@ function startMonitoring() {
   if (p.hr || p.dll) watch("personnel", collection(db, "personnel"), (d) => { state.personnel = d; });
   if (p.clinic) watch("aor", collection(db, "aor"), (d) => { state.aor = d; });
   if (p.admin) watch("monitors", collection(db, "monitors"), (d) => { state.monitors = d; });
+  if (p.admin) watch("requests", collection(db, "accessRequests"), (d) => { state.requests = d; });
   if (p.hr) watchAttendance();
   if (p.dll) watchDll();
+}
+function restartMonitoring() {
+  Object.values(state.watches).forEach((f) => f());
+  state.watches = {};
+  startMonitoring();
 }
 function watchAttendance() {
   const m = state.mon.month;
@@ -1162,8 +1427,8 @@ function watchDll() {
 
 // ----- Shared bits -----
 const inputCls = "text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
-const btnDark = "inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-brand-900 hover:bg-brand-950 text-white text-xs font-bold shadow transition";
-const btnLight = "inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition";
+const btnDark = "inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-xs font-bold shadow-sm transition-colors duration-300";
+const btnLight = "inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-full border border-brand-950/15 bg-white hover:border-brand-950 text-slate-700 hover:text-brand-950 text-xs font-semibold transition-colors duration-300";
 const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
 const lbl = (forId, text) => `<label for="${forId}" class="block text-xs font-semibold text-slate-700 mb-1">${text}</label>`;
 const chip = (text, cls) => `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${cls}">${text}</span>`;
@@ -1176,13 +1441,14 @@ const table = (heads, rows) => `<div class="overflow-x-auto"><table class="w-ful
 const selectBox = (id, act, options, value, cls = "") => `<select id="${id}" ${act ? `data-act="${act}"` : ""} class="${inputCls} ${cls}">${options.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
 const iconBtn = (act, id, icon, title) => `<button data-act="${act}" data-id="${esc(id)}" title="${title}" class="p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"><i data-lucide="${icon}" class="w-4 h-4"></i></button>`;
 const delBtn = (col, id) => `<button data-act="mon-del" data-col="${col}" data-id="${esc(id)}" title="Delete" class="p-1.5 rounded-md text-red-500 hover:text-red-700 hover:bg-red-50 transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
-const modalHead = (title, sub = "") => `<div class="bg-gradient-to-r from-brand-950 to-brand-900 text-white px-6 py-4 border-b-2 border-depedGold-500"><h3 class="text-base font-bold">${title}</h3>${sub ? `<p class="text-xs text-slate-300">${sub}</p>` : ""}</div>`;
+const modalHead = (title, sub = "") => `<div class="bg-brand-950 text-cream px-6 py-5"><h3 class="text-lg font-bold tracking-tight">${title}</h3>${sub ? `<p class="mt-0.5 text-xs text-white/55">${sub}</p>` : ""}</div>`;
 const modalFoot = (act, text, id = "") => `<div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
   <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-  <button data-act="${act}" data-id="${esc(id)}" class="px-5 py-2.5 bg-brand-900 hover:bg-brand-950 text-white rounded-lg text-xs font-bold shadow">${text}</button></div>`;
-const pageHead = (title, icon, sub) => `<div class="flex items-center gap-3 pb-3 mb-5 border-b border-slate-300">
-  <div class="w-10 h-10 rounded-xl bg-brand-900 text-depedGold-400 flex items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
-  <div><h2 class="text-xl sm:text-2xl font-bold text-brand-900 leading-tight">${title}</h2><p class="text-sm text-slate-600">${sub}</p></div></div>`;
+  <button data-act="${act}" data-id="${esc(id)}" class="px-5 py-2.5 bg-brand-950 hover:bg-depedGold-500 text-white rounded-full text-xs font-bold shadow-sm transition-colors duration-300">${text}</button></div>`;
+const pageHead = (title, icon, sub) => `<div class="flex items-end justify-between gap-4 pb-5 mb-6 border-b border-brand-950/10">
+  <div class="min-w-0"><div class="ld-kicker text-slate-500">${sub}</div>
+    <h2 class="mt-2 text-[clamp(2rem,4.5vw,3.25rem)] font-bold tracking-[-0.04em] leading-[0.95] text-brand-950">${title}</h2></div>
+  <span class="hidden sm:flex w-12 h-12 rounded-full bg-white border border-brand-950/5 shadow-sm items-center justify-center flex-shrink-0"><i data-lucide="${icon}" class="w-5 h-5 text-depedGold-500"></i></span></div>`;
 
 // ----- Monitoring page -----
 function monViews() {
@@ -1192,7 +1458,7 @@ function monViews() {
     ["aor", "AOR · Cleanest classroom", "sparkles", p.clinic],
     ["dll", "Daily Lesson Log", "book-open-check", p.dll],
     ["personnel", "Personnel", "users", p.hr || p.dll],
-    ["access", "Staff access", "shield-check", p.admin]
+    ["access", `Staff access${Object.keys(state.requests).length ? ` (${Object.keys(state.requests).length} new)` : ""}`, "shield-check", p.admin]
   ].filter((v) => v[3]);
 }
 
@@ -1228,7 +1494,168 @@ function attRecord(r) {
   return `${chip("Late", "bg-amber-50 text-amber-800 border-amber-300")}${bits ? `<div class="text-xs text-slate-600 mt-1">${bits}</div>` : ""}`;
 }
 
+// Attendance has three modes: a daily sheet to tag people, a month grid, and the list of all records.
 function monAttendance() {
+  const modes = [["daily", "Daily sheet", "list-checks"], ["month", "Month view", "calendar-days"], ["records", "All records", "list"]];
+  return `<div class="inline-flex flex-wrap p-1 mb-4 bg-white rounded-full border border-brand-950/10">
+      ${modes.map(([k, t, icon]) => `<button data-act="att-mode" data-mode="${k}" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-semibold rounded-full transition-colors duration-300 ${state.mon.attMode === k ? "bg-brand-950 text-cream" : "text-slate-500 hover:text-brand-950"}"><i data-lucide="${icon}" class="w-4 h-4"></i>${t}</button>`).join("")}
+    </div>
+    ${{ daily: attDaily, month: attMonth, records: attRecords }[state.mon.attMode]()}`;
+}
+
+// The loaded month always contains the selected day.
+function setAttMonth(m) {
+  if (!/^\d{4}-\d{2}$/.test(m || "")) return render();
+  if (m !== state.mon.month) { state.mon.month = m; watchAttendance(); }
+  if (state.mon.day.slice(0, 7) !== m) state.mon.day = todayIso().slice(0, 7) === m ? todayIso() : `${m}-01`;
+  render();
+}
+function setAttDay(d) {
+  if (!isDay(d)) return render();
+  state.mon.day = d;
+  setAttMonth(d.slice(0, 7));
+}
+const personFilter = (x) => (!state.mon.ptype || x.type === state.mon.ptype)
+  && (!state.mon.q || `${x.name} ${x.position || ""}`.toLowerCase().includes(state.mon.q.toLowerCase()));
+const recsOn = (pid, d) => Object.values(state.attendance).filter((r) => r.pid === pid && r.date === d);
+const attFilters = (placeholder) => `
+  <input id="mon-q" data-act="mon-q" value="${esc(state.mon.q)}" placeholder="${placeholder}" class="${inputCls} flex-1 min-w-[160px]">
+  ${selectBox("mon-ptype", "mon-ptype", [["", "All personnel"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], state.mon.ptype)}`;
+const noPersonnel = () => panel(empty("No personnel yet. Teaching and non-teaching personnel appear here once they create an account and choose their position."));
+
+function attDaily() {
+  const d = state.mon.day;
+  const all = Object.values(state.personnel);
+  if (!all.length) return noPersonnel();
+  const people = all.filter(personFilter).sort(byName);
+  const recs = (pid) => recsOn(pid, d);
+  const absent = people.filter((x) => recs(x.id).some((r) => r.type === "absent")).length;
+  const late = people.filter((x) => recs(x.id).some((r) => r.type === "late")).length;
+  const present = people.filter((x) => !recs(x.id).some((r) => r.type === "absent" && r.duration === "whole")).length;
+  const wd = parseDay(d).getDay();
+  const markBtn = (x, mark, text, on, onCls) => `<button data-act="att-mark" data-pid="${esc(x.id)}" data-mark="${mark}"
+    class="px-3 py-1.5 rounded-full text-xs font-bold border transition ${on ? onCls : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}">${text}</button>`;
+  const rows = (pt) => people.filter((x) => x.type === pt).map((x) => {
+    const rs = recs(x.id);
+    const isAbs = rs.some((r) => r.type === "absent"), isLate = rs.some((r) => r.type === "late");
+    return `<tr class="${isAbs ? "bg-red-50/50" : isLate ? "bg-amber-50/50" : ""}">
+      <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(x.name)}</div><div class="text-xs text-slate-500">${esc(x.position) || PTYPE[x.type]}${x.subject ? ` · ${esc(x.subject)}` : ""}</div></td>
+      <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5">
+        ${markBtn(x, "present", "Present", !rs.length, "bg-emerald-600 text-white border-emerald-700")}
+        ${markBtn(x, "absent", "Absent", isAbs, "bg-red-600 text-white border-red-700")}
+        ${markBtn(x, "late", "Late", isLate, "bg-amber-400 text-amber-950 border-amber-500")}
+      </div></td>
+      <td class="px-4 py-3 text-xs">${rs.length ? rs.map((r) => `<div class="flex items-start justify-between gap-2">
+          <div>${attRecord(r)}${r.remarks ? `<div class="text-slate-500 mt-0.5 whitespace-pre-line">${esc(r.remarks)}</div>` : ""}</div>
+          <div class="flex-shrink-0">${iconBtn("att-edit", r.id, "pencil", "Edit")}</div></div>`).join("") : `<span class="text-slate-400">—</span>`}</td>
+    </tr>`;
+  });
+  const section = (pt) => {
+    const r = rows(pt);
+    return r.length ? panel(panelHead(`${PTYPE[pt]} personnel · ${r.length}`) + table(["Name", "Attendance", "Details"], r)) : "";
+  };
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <div class="inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
+        <button data-act="att-day" data-step="-1" title="Previous day" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+        <span class="px-2 text-xs font-bold text-slate-700 whitespace-nowrap">${fmtDay(d, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
+        <button data-act="att-day" data-step="1" title="Next day" class="px-2.5 py-2 hover:bg-slate-50"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+      </div>
+      <input id="att-day-pick" type="date" data-act="att-day-pick" value="${d}" title="Pick a day" class="${inputCls}">
+      ${d !== todayIso() ? `<button data-act="att-day-today" class="${btnLight}">Today</button>` : ""}
+      ${attFilters("Search name")}
+    </div>
+    ${wd === 0 || wd === 6 ? `<div class="mb-4 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-2">This day is a ${wd === 0 ? "Sunday" : "Saturday"}. Only tag people if there was work or an activity.</div>` : ""}
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      ${statTile("Present", present, "bg-emerald-50 text-emerald-900 border-emerald-300")}
+      ${statTile("Absent", absent, "bg-red-50 text-red-900 border-red-200")}
+      ${statTile("Late", late, "bg-amber-50 text-amber-900 border-amber-300")}
+      ${statTile("Personnel", people.length, "bg-brand-900 text-white border-brand-950")}
+    </div>
+    <p class="text-xs text-slate-500 mb-3">Everyone is <strong class="text-emerald-700">Present</strong> unless tagged. Tap <strong class="text-red-700">Absent</strong> or <strong class="text-amber-700">Late</strong> to add the details.</p>
+    <div class="space-y-5">${section("teaching")}${section("nonteaching")}${people.length ? "" : panel(empty("No one matches."))}</div>`;
+}
+
+function attMonth() {
+  const m = state.mon.month;
+  const all = Object.values(state.personnel);
+  if (!all.length) return noPersonnel();
+  const people = all.filter(personFilter).sort((a, b) => a.type.localeCompare(b.type) * -1 || byName(a, b));
+  const [y, mo] = m.split("-").map(Number);
+  const days = Array.from({ length: new Date(y, mo, 0).getDate() }, (_, i) => `${m}-${pad(i + 1)}`);
+  const today = todayIso();
+  const idx = {};
+  Object.values(state.attendance).forEach((r) => { ((idx[r.pid] ||= {})[r.date] ||= []).push(r); });
+  const weekend = (d) => [0, 6].includes(parseDay(d).getDay());
+  const cell = (x, d) => {
+    const rs = (idx[x.id] || {})[d] || [];
+    const abs = rs.find((r) => r.type === "absent"), late = rs.find((r) => r.type === "late");
+    const mark = abs ? (abs.duration && abs.duration !== "whole" ? "½" : "A") + (late ? "L" : "") : late ? "L" : "";
+    const cls = abs ? "bg-red-500 text-white" : late ? "bg-amber-400 text-amber-950" : weekend(d) ? "bg-slate-100 text-slate-300 hover:bg-slate-200" : "text-slate-300 hover:bg-blue-50";
+    const tip = rs.length ? rs.map((r) => `${r.type === "absent" ? `Absent: ${r.kind}` : `Late${r.minutes ? ` ${r.minutes} min` : ""}`}${r.remarks ? ` (${r.remarks})` : ""}`).join("; ") : "Click to tag";
+    return `<td class="px-px py-0.5"><button data-act="att-cell" data-pid="${esc(x.id)}" data-date="${d}" title="${esc(x.name)} · ${fmtDay(d)}: ${esc(tip)}"
+      class="w-6 h-7 rounded text-[11px] font-extrabold transition ${cls} ${d === today ? "ring-2 ring-blue-500" : ""}">${mark || "·"}</button></td>`;
+  };
+  const sumOf = (x) => attendanceSummary(Object.values(idx[x.id] || {}).flat())[0] || { days: 0, lates: 0 };
+  return `
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <input id="mon-month" type="month" data-act="mon-month" value="${m}" title="Month" class="${inputCls}">
+      ${attFilters("Search name")}
+    </div>
+    <div class="flex flex-wrap items-center gap-3 mb-3 text-xs text-slate-600">
+      <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center">A</span>Absent</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-red-500 text-white text-[10px] font-extrabold flex items-center justify-center">½</span>Half day absent</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-amber-400 text-amber-950 text-[10px] font-extrabold flex items-center justify-center">L</span>Late</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-5 h-5 rounded bg-slate-100 border border-slate-200"></span>Weekend</span>
+      <span class="text-slate-500">Click a day to tag or edit it.</span>
+    </div>
+    ${panel(panelHead(`${fmtMonth(m)} · ${people.length} personnel`) + (people.length ? `<div class="overflow-x-auto"><table class="text-sm border-collapse">
+      <thead class="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+        <th class="sticky left-0 z-10 bg-slate-50 text-left font-bold px-3 py-2 min-w-[160px]">Name</th>
+        ${days.map((d) => `<th class="font-bold px-0 py-1 w-6 text-center ${weekend(d) ? "text-slate-300" : ""}"><div>${"SMTWTFS"[parseDay(d).getDay()]}</div><div class="tabular text-[11px] ${d === today ? "text-blue-700" : "text-slate-700"}">${Number(d.slice(8))}</div></th>`).join("")}
+        <th class="font-bold px-2 py-2 text-center text-red-700">Abs</th><th class="font-bold px-2 py-2 text-center text-amber-700">Late</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-100">${people.map((x) => {
+        const s = sumOf(x);
+        return `<tr><td class="sticky left-0 z-10 bg-white px-3 py-1.5"><div class="font-semibold text-slate-900 text-xs whitespace-nowrap">${esc(x.name)}</div><div class="text-[10px] text-slate-500">${PTYPE[x.type]}</div></td>
+          ${days.map((d) => cell(x, d)).join("")}
+          <td class="px-2 text-center tabular text-xs font-bold text-red-700">${s.days || "—"}</td><td class="px-2 text-center tabular text-xs font-bold text-amber-700">${s.lates || "—"}</td></tr>`;
+      }).join("")}</tbody></table></div>` : empty("No one matches.")))}`;
+}
+
+// Tag from the daily sheet or the month grid: edit what's there, or start a new record for that person and day.
+function tagAttendance(pid, date, type) {
+  const existing = recsOn(pid, date).find((r) => !type || r.type === type);
+  if (existing) return openAttendance(existing.id);
+  openAttendance("", { pid, date, type: type || "absent" });
+}
+function confirmAttClear(pid) {
+  const d = state.mon.day;
+  const rs = recsOn(pid, d);
+  if (!rs.length) return;
+  const x = state.personnel[pid];
+  openModal(`<div class="p-6 space-y-3">
+    <h3 class="text-lg font-bold text-slate-900">Mark as present?</h3>
+    <p class="text-sm text-slate-600">This removes the ${rs.map((r) => (r.type === "absent" ? "absence" : "late")).join(" and ")} record for <strong>${esc(x ? x.name : rs[0].name)}</strong> on ${fmtDay(d)}.</p>
+  </div>
+  <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+    <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+    <button data-act="att-clear-yes" data-pid="${esc(pid)}" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow">Mark present</button>
+  </div>`);
+}
+async function clearAttendance(pid) {
+  try {
+    const b = writeBatch(db);
+    recsOn(pid, state.mon.day).forEach((r) => b.delete(doc(db, "attendance", r.id)));
+    await b.commit();
+    closeModal();
+    toast("Marked present");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+function attRecords() {
   const f = state.mon;
   const all = Object.values(state.attendance);
   const recs = all
@@ -1271,14 +1698,17 @@ function monAttendance() {
     </div>`;
 }
 
-function openAttendance(id) {
+// pre: { pid, date, type } to start a new record for someone (daily sheet, month grid).
+function openAttendance(id, pre = {}) {
   const r = id ? state.attendance[id] : null;
+  const pick = r ? r.pid : pre.pid;
+  const day = r ? r.date : pre.date || todayIso();
   const people = Object.values(state.personnel).sort(byName);
-  if (!people.length && !r) return toast("Add personnel first under Monitoring → Personnel.", "warn");
-  const type = r ? r.type : "absent";
+  if (!people.length && !r) return toast("No personnel yet. People appear once they create an account.", "warn");
+  const type = r ? r.type : pre.type || "absent";
   const group = (pt) => {
     const list = people.filter((p) => p.type === pt);
-    return list.length ? `<optgroup label="${PTYPE[pt]}">${list.map((p) => `<option value="${esc(p.id)}" ${r && r.pid === p.id ? "selected" : ""}>${esc(p.name)}${p.position ? ` · ${esc(p.position)}` : ""}</option>`).join("")}</optgroup>` : "";
+    return list.length ? `<optgroup label="${PTYPE[pt]}">${list.map((p) => `<option value="${esc(p.id)}" ${pick === p.id ? "selected" : ""}>${esc(p.name)}${p.position ? ` · ${esc(p.position)}` : ""}</option>`).join("")}</optgroup>` : "";
   };
   const typeBtn = (k, text, icon) => `<label class="cursor-pointer">
     <input type="radio" name="att-type" value="${k}" data-act="att-type" ${type === k ? "checked" : ""} class="sr-only peer">
@@ -1296,7 +1726,7 @@ function openAttendance(id) {
       <div class="grid grid-cols-2 gap-2">${typeBtn("absent", "Absent", "user-x")}${typeBtn("late", "Late / Tardy", "clock")}</div>
       <div id="att-absent" class="space-y-3 ${type === "absent" ? "" : "hidden"}">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          ${field("att-from", r ? "Date" : "Date (from)", "date", `value="${r && r.type === "absent" ? r.date : todayIso()}"`)}
+          ${field("att-from", r ? "Date" : "Date (from)", "date", `value="${day}"`)}
           ${r ? "" : field("att-to", 'To <span class="font-normal text-slate-400">(if more than 1 day)</span>', "date")}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1306,7 +1736,7 @@ function openAttendance(id) {
         ${r ? "" : `<p class="text-[11px] text-slate-500">For several days, also set <strong>To</strong>. Saturdays and Sundays in between are skipped.</p>`}
       </div>
       <div id="att-late" class="grid grid-cols-1 sm:grid-cols-3 gap-3 ${type === "late" ? "" : "hidden"}">
-        ${field("att-date", "Date", "date", `value="${r && r.type === "late" ? r.date : todayIso()}"`)}
+        ${field("att-date", "Date", "date", `value="${day}"`)}
         ${field("att-time", "Time in", "time", `value="${r ? esc(r.timeIn || "") : ""}"`)}
         ${field("att-min", "Minutes late", "number", `min="1" max="600" value="${r && r.minutes ? r.minutes : ""}"`)}
       </div>
@@ -1527,7 +1957,7 @@ function monDll() {
             <td class="px-4 py-3"><input id="dll-r-${esc(t.id)}" data-act="dll-remarks" data-pid="${esc(t.id)}" value="${esc(c.remarks)}" maxlength="300" placeholder="Remarks (optional)" class="w-full min-w-[180px] text-xs px-2.5 py-2 rounded-md border border-slate-300 focus:ring-1 focus:ring-blue-500"></td>
           </tr>`;
         }))
-      : empty(`No ${esc(s)} teachers on the list yet. Add them under <strong>Personnel</strong> with subject area ${esc(s)}.`)))}`;
+      : empty(`No ${esc(s)} teachers yet. Teachers appear here once they create an account with subject area ${esc(s)}.`)))}`;
 }
 
 function markAllOnTime() {
@@ -1564,88 +1994,71 @@ async function saveDll() {
   }
 }
 
-// ----- Personnel list (HR; Head / Master Teachers see the teachers in their subject areas) -----
-const canEditPerson = (x) => state.perms.hr || (x.type === "teaching" && state.perms.subjects.includes(x.subject));
+// ----- Personnel list -----
+// Everyone who creates an account is on it, with the position they chose. HR can correct an entry;
+// Head / Master Teachers see the teachers in their subject areas.
+const canEditPerson = () => state.perms.hr;
 
 function monPersonnel() {
   const p = state.perms, f = state.mon;
-  const all = Object.values(state.personnel).filter(canEditPerson);
+  const all = Object.values(state.personnel).filter((x) => p.hr || (x.type === "teaching" && p.subjects.includes(x.subject)));
   const list = all
     .filter((x) => !f.ptype || x.type === f.ptype)
-    .filter((x) => !f.q || `${x.name} ${x.position || ""} ${x.subject || ""}`.toLowerCase().includes(f.q.toLowerCase()))
+    .filter((x) => !f.q || `${x.name} ${x.position || ""} ${x.subject || ""} ${x.office || ""}`.toLowerCase().includes(f.q.toLowerCase()))
     .sort(byName);
   const n = (t) => all.filter((x) => x.type === t).length;
   return `
     <div class="flex flex-wrap items-center gap-2 mb-4">
-      <input id="mon-q" data-act="mon-q" value="${esc(f.q)}" placeholder="Search name, position or subject" class="${inputCls} flex-1 min-w-[180px]">
+      <input id="mon-q" data-act="mon-q" value="${esc(f.q)}" placeholder="Search name, position, subject or office" class="${inputCls} flex-1 min-w-[180px]">
       ${p.hr ? selectBox("mon-ptype", "mon-ptype", [["", "All personnel"], ["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], f.ptype) : ""}
-      <button data-act="person-new" class="${btnDark}"><i data-lucide="user-plus" class="w-4 h-4"></i>Add personnel</button>
     </div>
+    <p class="text-xs text-slate-500 mb-3"><i data-lucide="info" class="w-3.5 h-3.5 inline -mt-0.5"></i>
+      People appear here when they <strong class="text-slate-700">create an account</strong> and choose their position.${p.hr ? "" : ` Showing teachers in your subject areas: <strong class="text-slate-700">${esc(p.subjects.join(", "))}</strong>.`}</p>
     ${p.hr ? `<div class="grid grid-cols-2 gap-3 mb-5 max-w-md">
         ${statTile("Teaching", n("teaching"), "bg-blue-50 text-blue-900 border-blue-200")}
         ${statTile("Non-teaching", n("nonteaching"), "bg-emerald-50 text-emerald-900 border-emerald-300")}
-      </div>`
-      : `<p class="text-xs text-slate-500 mb-3">Showing teachers in your subject areas: <strong class="text-slate-700">${esc(p.subjects.join(", "))}</strong>.</p>`}
+      </div>` : ""}
     ${panel(panelHead("Personnel list", `<span class="text-[11px] text-slate-500">Used by Attendance and the Daily Lesson Log</span>`) + (list.length
-      ? table(["Name", "Type", "Subject area", "Position", ""], list.map((x) => `<tr>
-          <td class="px-4 py-3 font-semibold text-slate-900">${esc(x.name)}</td>
+      ? table(["Name", "Type", "Position", "Subject area / Office", ""], list.map((x) => `<tr>
+          <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(x.name)}</div>${x.email ? `<div class="text-xs text-slate-500">${esc(x.email)}</div>` : ""}</td>
           <td class="px-4 py-3 text-xs">${chip(PTYPE[x.type] || "—", x.type === "teaching" ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-emerald-50 text-emerald-800 border-emerald-200")}</td>
-          <td class="px-4 py-3 text-xs text-slate-700">${esc(x.subject) || "—"}</td>
-          <td class="px-4 py-3 text-xs text-slate-600">${esc(x.position) || "—"}</td>
-          <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("person-edit", x.id, "pencil", "Edit")}${p.hr ? delBtn("personnel", x.id) : ""}</td>
+          <td class="px-4 py-3 text-xs text-slate-700">${esc(x.position) || "—"}</td>
+          <td class="px-4 py-3 text-xs text-slate-600">${esc(x.subject || x.office) || "—"}</td>
+          <td class="px-4 py-3 text-right whitespace-nowrap">${canEditPerson() ? iconBtn("person-edit", x.id, "pencil", "Edit") + delBtn("personnel", x.id) : ""}</td>
         </tr>`))
-      : empty(all.length ? "No one matches." : "No personnel yet. Click <strong>Add personnel</strong>. You can paste many names at once.")))}`;
+      : empty(all.length ? "No one matches." : "No one yet. Personnel appear here once they create an account.")))}`;
 }
 
 function openPerson(id) {
-  const x = id ? state.personnel[id] : null;
-  const hr = state.perms.hr;
-  const type = x ? x.type : "teaching";
-  const subs = hr ? SUBJECTS : state.perms.subjects;
-  const subjectOpts = (hr ? [["", "— None —"]] : []).concat(subs.map((s) => [s, s]));
-  const defSubject = x ? x.subject : (subs.includes(state.mon.subject) ? state.mon.subject : hr ? "" : subs[0]);
-  openModal(`${modalHead(x ? "Edit personnel" : "Add personnel", hr ? "Teaching and non-teaching personnel" : "Teachers in your subject areas")}
+  const x = state.personnel[id];
+  if (!x) return;
+  const all = [...POSITIONS.teaching, ...POSITIONS.nonteaching];
+  const position = all.includes(x.position) ? x.position : "";
+  openModal(`${modalHead("Edit personnel", esc(x.email || ""))}
     <div class="p-6 space-y-3">
-      ${x ? field("person-name", "Full name", "text", `value="${esc(x.name)}" maxlength="120"`)
-        : `<div>${lbl("person-names", 'Full names <span class="font-normal text-slate-400">(one per line to add many at once)</span>')}
-            <textarea id="person-names" rows="6" placeholder="Juan Dela Cruz&#10;Maria Santos&#10;Jose Rizal" class="w-full ${inputCls} resize-y"></textarea></div>`}
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        ${hr ? `<div>${lbl("person-type", "Type")}${selectBox("person-type", "person-type", [["teaching", "Teaching"], ["nonteaching", "Non-teaching"]], type, "w-full")}</div>` : ""}
-        <div id="person-subject-wrap" class="${type === "teaching" ? "" : "hidden"}">${lbl("person-subject", "Subject area")}${selectBox("person-subject", "", subjectOpts, defSubject, "w-full")}</div>
-      </div>
-      ${field("person-position", 'Position <span class="font-normal text-slate-400">(optional)</span>', "text", `value="${esc(x ? x.position : "")}" maxlength="120" placeholder="e.g. Teacher III · Administrative Officer II"`)}
-      ${x ? "" : `<p class="text-[11px] text-slate-500">Everyone added together gets the same type, subject area and position. Names already on the list are skipped.</p>`}
+      ${field("person-name", "Full name", "text", `value="${esc(x.name)}" maxlength="120"`)}
+      ${positionFields("person", position, position ? x.subject || x.office || "" : "")}
+      ${x.position && !position ? `<p class="text-[11px] text-amber-700">Was: ${esc(x.position)}. Choose the matching position from the list.</p>` : ""}
     </div>
-    ${modalFoot("person-save", x ? "Save changes" : "Add", id || "")}`);
+    ${modalFoot("person-save", "Save changes", id)}`);
 }
 
 async function savePerson(id) {
-  const hr = state.perms.hr;
-  const type = hr ? val("person-type") : "teaching";
-  const subject = type === "teaching" ? val("person-subject") : "";
-  const position = val("person-position").slice(0, 120);
-  if (!hr && !state.perms.subjects.includes(subject)) return toast("Pick one of your subject areas.", "warn");
-  const stamp = { by: state.user.email, updatedAt: serverTimestamp() };
+  const name = val("person-name").replace(/\s+/g, " ");
+  const position = val("person-position"), dept = val("person-dept");
+  if (!name) return toast("Enter the name.", "warn");
+  const err = positionError(position, dept);
+  if (err) return toast(err, "warn");
+  const type = positionType(position);
   try {
-    if (id) {
-      const name = val("person-name").replace(/\s+/g, " ");
-      if (!name) return toast("Enter the name.", "warn");
-      await updateDoc(doc(db, "personnel", id), { name: name.slice(0, 120), type, subject, position, ...stamp });
-      toast("Saved");
-    } else {
-      const names = [...new Set(val("person-names").split("\n").map((s) => s.trim().replace(/\s+/g, " ").slice(0, 120)).filter(Boolean))];
-      if (!names.length) return toast("Enter at least one name.", "warn");
-      if (names.length > 300) return toast("Add at most 300 names at a time.", "warn");
-      const have = new Set(Object.values(state.personnel).map((x) => String(x.name).toLowerCase()));
-      const fresh = names.filter((n) => !have.has(n.toLowerCase()));
-      if (!fresh.length) return toast("Everyone is already on the list.", "warn");
-      const b = writeBatch(db);
-      fresh.forEach((n) => b.set(doc(collection(db, "personnel")), { name: n, type, subject, position, createdAt: serverTimestamp(), ...stamp }));
-      await b.commit();
-      const skipped = names.length - fresh.length;
-      toast(`Added ${fresh.length}${skipped ? ` · ${skipped} already on the list` : ""}`);
-    }
+    await updateDoc(doc(db, "personnel", id), {
+      name: name.slice(0, 120), type, position,
+      subject: type === "teaching" && SUBJECTS.includes(dept) ? dept : "",
+      office: type === "nonteaching" ? dept : "",
+      by: state.user.email, updatedAt: serverTimestamp()
+    });
     closeModal();
+    toast("Saved");
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -1654,55 +2067,58 @@ async function savePerson(id) {
 // ----- Staff access (admins) -----
 function monAccess() {
   const list = Object.values(state.monitors).sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+  const reqs = Object.values(state.requests).sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+  const accessChips = (m) => `<div class="flex flex-wrap gap-1">${PERM_LABELS.filter(([k]) => m[k]).map(([, t]) => chip(t, "bg-brand-50 text-brand-900 border-brand-200")).join("")}</div>`;
+  const subjectsOf = (m) => (m.dll && (m.subjects || []).length ? esc(m.subjects.join(", ")) : "—");
   return `
     <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <p class="text-sm text-slate-600 max-w-2xl">Choose who can open Monitoring. Staff create an account on this site with the <strong>same email</strong>, then sign out and in again. Admins already have full access.</p>
+      <p class="text-sm text-slate-600 max-w-2xl">Choose who can open Monitoring. People who sign up as HR, School Clinic or Head / Master Teacher appear under <strong>Waiting for approval</strong>. Admins already have full access.</p>
       <button data-act="access-new" class="${btnDark}"><i data-lucide="user-plus" class="w-4 h-4"></i>Add staff</button>
     </div>
+    ${reqs.length ? `<div class="mb-5 rounded-xl border-2 border-amber-300 overflow-hidden">${panel(panelHead(`<span class="inline-flex items-center gap-2"><i data-lucide="hourglass" class="w-4 h-4 text-amber-600"></i>Waiting for approval · ${reqs.length}</span>`)
+      + table(["Name", "Asked for", "Subject areas", ""], reqs.map((r) => `<tr class="bg-amber-50/40">
+          <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(r.name) || "—"}</div><div class="text-xs text-slate-500">${esc(r.id)}${r.position ? ` · ${esc(r.position)}` : ""}</div></td>
+          <td class="px-4 py-3">${accessChips(r)}</td>
+          <td class="px-4 py-3 text-xs text-slate-600">${subjectsOf(r)}</td>
+          <td class="px-4 py-3 text-right whitespace-nowrap">
+            <button data-act="access-edit" data-id="${esc(r.id)}" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition"><i data-lucide="check" class="w-3.5 h-3.5"></i>Approve</button>
+            <button data-act="mon-del" data-col="accessRequests" data-id="${esc(r.id)}" class="ml-1 px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold transition">Decline</button>
+          </td>
+        </tr>`)))}</div>` : ""}
     ${panel(panelHead("Staff with Monitoring access") + (list.length
       ? table(["Name", "Access", "Subject areas", ""], list.map((m) => `<tr>
           <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(m.name) || "—"}</div><div class="text-xs text-slate-500">${esc(m.id)}</div></td>
-          <td class="px-4 py-3"><div class="flex flex-wrap gap-1">${PERM_LABELS.filter(([k]) => m[k]).map(([, t]) => chip(t, "bg-brand-50 text-brand-900 border-brand-200")).join("")}</div></td>
-          <td class="px-4 py-3 text-xs text-slate-600">${m.dll && (m.subjects || []).length ? esc(m.subjects.join(", ")) : "—"}</td>
+          <td class="px-4 py-3">${accessChips(m)}</td>
+          <td class="px-4 py-3 text-xs text-slate-600">${subjectsOf(m)}</td>
           <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("access-edit", m.id, "pencil", "Edit")}${delBtn("monitors", m.id)}</td>
         </tr>`))
       : empty("No staff yet. Add the HR personnel, the School Clinic and the Head / Master Teachers.")))}`;
 }
 
+// Edit someone's access, or approve a request (the form starts with what they asked for).
 function openAccess(id) {
-  const m = id ? state.monitors[id] : null;
-  const check = (value, text, hint) => `<label class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer">
-    <input type="checkbox" name="access-role" value="${value}" ${m && m[value] ? "checked" : ""} class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-800">
-    <span><span class="block text-sm font-bold text-slate-900">${text}</span><span class="block text-xs text-slate-500">${hint}</span></span></label>`;
-  openModal(`${modalHead(m ? "Edit staff access" : "Add staff access", "Monitoring")}
+  const req = id && !state.monitors[id] ? state.requests[id] : null;
+  const m = id ? state.monitors[id] || req : null;
+  openModal(`${modalHead(req ? "Approve staff access" : m ? "Edit staff access" : "Add staff access", req ? "Check the access they asked for, then approve" : "Monitoring")}
     <div class="p-6 space-y-3">
       ${field("access-email", "Email", "email", `value="${esc(m ? m.id : "")}" ${m ? "disabled" : ""} placeholder="name@deped.gov.ph"`)}
       ${field("access-name", "Name", "text", `value="${esc(m ? m.name : "")}" maxlength="120"`)}
-      <div class="space-y-2">
-        ${check("hr", "Human Resource", "Attendance of teaching and non-teaching personnel")}
-        ${check("clinic", "School Clinic", "AOR · cleanest classroom per week")}
-        ${check("dll", "Head Teacher / Master Teacher", "Daily Lesson Log for the subject areas below")}
-      </div>
-      <div><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas <span class="font-normal text-slate-400">(Head / Master Teacher only)</span></div>
-        <div class="grid grid-cols-2 gap-1.5">${SUBJECTS.map((s) => `<label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-          <input type="checkbox" name="access-subject" value="${esc(s)}" ${m && (m.subjects || []).includes(s) ? "checked" : ""} class="w-4 h-4 rounded border-slate-300 text-brand-800">${esc(s)}</label>`).join("")}</div></div>
+      ${roleFields("access", m)}
     </div>
-    ${modalFoot("access-save", "Save access", id || "")}`);
+    ${modalFoot("access-save", req ? "Approve" : "Save access", id || "")}`);
 }
 
 async function saveAccess(id) {
   const email = (id || val("access-email")).toLowerCase();
   if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) return toast("Enter a valid email.", "warn");
-  const on = (v) => !!document.querySelector(`input[name=access-role][value=${v}]:checked`);
-  const subjects = [...document.querySelectorAll("input[name=access-subject]:checked")].map((i) => i.value);
-  const data = { name: val("access-name").slice(0, 120), hr: on("hr"), clinic: on("clinic"), dll: on("dll"), subjects: [], by: state.user.email, updatedAt: serverTimestamp() };
-  if (!data.hr && !data.clinic && !data.dll) return toast("Tick at least one kind of access.", "warn");
-  if (data.dll) {
-    if (!subjects.length) return toast("Pick the subject areas this Head / Master Teacher monitors.", "warn");
-    data.subjects = subjects;
-  }
+  const roles = readRoles("access");
+  if (typeof roles === "string") return toast(roles, "warn");
+  const data = { name: val("access-name").slice(0, 120), ...roles, by: state.user.email, updatedAt: serverTimestamp() };
   try {
-    await setDoc(doc(db, "monitors", email), data);
+    const b = writeBatch(db);
+    b.set(doc(db, "monitors", email), data);
+    if (state.requests[email]) b.delete(doc(db, "accessRequests", email));
+    await b.commit();
     closeModal();
     toast(`Access saved for ${data.name || email}`);
   } catch (e) {
@@ -1714,8 +2130,9 @@ async function saveAccess(id) {
 const DEL_TEXT = {
   attendance: "this attendance record",
   aor: "this week's cleanest classroom ratings",
-  personnel: "this person from the list. Their attendance and DLL records stay",
-  monitors: "this staff member's Monitoring access"
+  personnel: "this person from the list. Their attendance and DLL records stay. If they still have an account, they're asked for their position again the next time they sign in",
+  monitors: "this staff member's Monitoring access",
+  accessRequests: "this access request. They stay a regular user and can ask again"
 };
 function confirmMonDelete(col, id) {
   if (!DEL_TEXT[col]) return;
@@ -1755,7 +2172,7 @@ function renderReports() {
         <div><h3 class="text-base font-bold text-slate-900">${title}</h3><p class="text-xs text-slate-500">${text}</p></div>
       </div>
       ${inner}
-      <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-2.5 rounded-lg bg-gradient-to-r from-depedGold-500 to-amber-500 hover:from-depedGold-600 hover:to-amber-600 text-brand-950 text-sm font-bold shadow transition"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
+      <button data-act="rep-gen" data-kind="${kind}" class="mt-auto inline-flex items-center justify-center gap-2 py-3 rounded-full bg-brand-950 hover:bg-depedGold-500 text-white text-sm font-bold shadow-sm transition-colors duration-300"><i data-lucide="printer" class="w-4 h-4"></i>Generate report</button>
     </div>`;
   const cards = [];
   if (p.hr) cards.push(card("att", "calendar-x", "bg-red-50 text-red-700", "Attendance and Punctuality",
@@ -2032,6 +2449,20 @@ document.addEventListener("click", async (e) => {
       if (state.mon.view === "dll") state.dllDrafts = {};
       state.mon.view = el.dataset.view; render(); break;
     case "att-new": openAttendance(); break;
+    case "att-mode": state.mon.attMode = el.dataset.mode; render(); break;
+    case "att-day": setAttDay(addDays(state.mon.day, Number(el.dataset.step))); break;
+    case "att-day-today": setAttDay(todayIso()); break;
+    case "att-mark":
+      if (el.dataset.mark === "present") confirmAttClear(el.dataset.pid);
+      else tagAttendance(el.dataset.pid, state.mon.day, el.dataset.mark);
+      break;
+    case "att-cell": tagAttendance(el.dataset.pid, el.dataset.date); break;
+    case "att-clear-yes": clearAttendance(el.dataset.pid); break;
+    case "req-open": openRequest(); break;
+    case "profile": openProfile(false); break;
+    case "profile-save": saveProfile(); break;
+    case "req-save": saveRequest(); break;
+    case "req-cancel": cancelRequest(); break;
     case "att-edit": openAttendance(el.dataset.id); break;
     case "att-save": saveAttendance(el.dataset.id); break;
     case "aor-edit": openAor(el.dataset.id); break;
@@ -2040,7 +2471,6 @@ document.addEventListener("click", async (e) => {
     case "dll-today": setDllWeek(mondayOf(todayIso())); break;
     case "dll-all-ontime": markAllOnTime(); break;
     case "dll-save": saveDll(); break;
-    case "person-new": openPerson(); break;
     case "person-edit": openPerson(el.dataset.id); break;
     case "person-save": savePerson(el.dataset.id); break;
     case "access-new": openAccess(); break;
@@ -2067,14 +2497,19 @@ document.addEventListener("change", (e) => {
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
     // Monitoring
-    case "mon-month": if (el.value) { state.mon.month = el.value; watchAttendance(); } render(); break;
+    case "mon-month": setAttMonth(el.value); break;
+    case "att-day-pick": setAttDay(el.value); break;
+    case "pick-position": positionPicked(el.dataset.prefix, el.value); break;
+    case "su-role":
+      $("#su-subjects").classList.toggle("hidden", el.value !== "dll");
+      $("#su-role-note").classList.toggle("hidden", !el.value);
+      break;
     case "mon-ptype": state.mon.ptype = el.value; render(); break;
     case "att-type":
       $("#att-absent").classList.toggle("hidden", el.value !== "absent");
       $("#att-late").classList.toggle("hidden", el.value !== "late");
       break;
     case "aor-week": aorWeekChanged(el.value); break;
-    case "person-type": $("#person-subject-wrap").classList.toggle("hidden", el.value !== "teaching"); break;
     case "dll-subject":
       if (dllDiscardOk()) { state.mon.subject = el.value; state.dllDrafts = {}; }
       render(); break;
