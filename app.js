@@ -2458,17 +2458,26 @@ function renderScores() {
     </div>`;
 }
 
+// Certificate design follows the school's sample (gold corners, yellow seal band, script title).
+// Seals shown in the header band; add more image files to the site and list them here.
+const CERT_SEALS = ["logo.png"];
+const CERT_SIGNERS = { name1: "MICHAEL S. RUBINO", title1: "Asst. to the School Principal", name2: "BEHNJO S. MARTIN", title2: "School Principal I" };
+
 function openCert(k) {
   const aw = scoreAwards(computeScores())[k];
   if (!aw || !aw.people.length) return;
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem("cert-signers") || "{}"); } catch (e) { saved = {}; }
+  try { saved = JSON.parse(localStorage.getItem("cert-signers-v2") || "{}"); } catch (e) { saved = {}; }
+  const sg = { ...CERT_SIGNERS, ...saved };
+  const pair = (i, label) => `<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      ${field(`cert-name${i}`, `${label}: name`, "text", `value="${esc(sg["name" + i])}" maxlength="80"`)}
+      ${field(`cert-title${i}`, "Position", "text", `value="${esc(sg["title" + i])}" maxlength="80"`)}</div>`;
   openModal(`${modalHead(aw.title, `${aw.people.length === 1 ? esc(aw.people[0].p.name) : `${aw.people.length} certificates`} · ${periodText(state.score.from, state.score.to)}`)}
     <div class="p-6 space-y-3">
-      ${field("cert-date", "Date of awarding", "date", `value="${todayIso()}"`)}
-      ${field("cert-head", "School Head", "text", `value="${esc(saved.head || "")}" maxlength="80" placeholder="Full name"`)}
-      ${field("cert-chair", "Chair, PRAISE Committee", "text", `value="${esc(saved.chair || "")}" maxlength="80" placeholder="Full name"`)}
-      <p class="text-[11px] text-slate-500">The certificate opens in a new tab. Print it or save it as PDF (landscape).</p>
+      ${field("cert-date", "Date given", "date", `value="${todayIso()}"`)}
+      ${pair(1, "Left signatory")}
+      ${pair(2, "Right signatory")}
+      <p class="text-[11px] text-slate-500">Opens in a new tab, ready to print or save as PDF (A4 landscape). Names are remembered for next time.</p>
     </div>
     ${modalFoot("cert-go", "Generate", k)}`);
 }
@@ -2476,8 +2485,8 @@ function openCert(k) {
 function generateCerts(k) {
   const aw = scoreAwards(computeScores())[k];
   if (!aw || !aw.people.length) return;
-  const signers = { head: val("cert-head"), chair: val("cert-chair") };
-  try { localStorage.setItem("cert-signers", JSON.stringify(signers)); } catch (e) { /* private mode */ }
+  const signers = { name1: val("cert-name1"), title1: val("cert-title1"), name2: val("cert-name2"), title2: val("cert-title2") };
+  try { localStorage.setItem("cert-signers-v2", JSON.stringify(signers)); } catch (e) { /* private mode */ }
   const date = isDay(val("cert-date")) ? val("cert-date") : todayIso();
   const w = window.open("", "_blank");
   if (!w) return toast("Allow pop-ups for this site to open the certificate.", "warn");
@@ -2486,58 +2495,91 @@ function generateCerts(k) {
   closeModal();
 }
 
+// "for the month of AUGUST 2026" for a whole month, "for School Year 2026–2027" from June, else the dates.
+function certPeriod(from, to) {
+  const [y, m] = from.split("-").map(Number);
+  const last = `${from.slice(0, 7)}-${pad(new Date(y, m, 0).getDate())}`;
+  if (from.endsWith("-01") && (to === last || (from.slice(0, 7) === todayIso().slice(0, 7) && to === todayIso())))
+    return `for the month of <b>${fmtMonth(from.slice(0, 7)).toUpperCase()}</b>`;
+  if (from.endsWith("-06-01") && to > from) return `for <b>School Year ${y}–${y + 1}</b>`;
+  return `for the period <b>${esc(periodText(from, to))}</b>`;
+}
+const ordinal = (n) => `${n}<sup>${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}</sup>`;
+
 function certDoc(aw, k, signers, date) {
-  const logo = new URL("logo.png", location.href).href;
-  const period = periodText(state.score.from, state.score.to);
-  const given = fmtDay(date, { month: "long", day: "numeric", year: "numeric" });
-  const reason = (r) => ({
-    teach: `for outstanding performance in attendance, punctuality, lesson planning (ILAW) and classroom care, with an overall score of ${round1(r.overall)}`,
-    non: `for exemplary attendance, punctuality and adherence to the school uniform policy, with an overall score of ${round1(r.overall)}`,
-    perfect: "for perfect attendance, with no absence, no tardiness and complete uniform",
-    adviser: `for leading ${esc(r.p.advisory)} as the cleanest classroom of Grade ${r.grade}, earning ${r.aorPts} Area of Responsibility points`
+  const base = new URL(".", location.href).href;
+  const period = certPeriod(state.score.from, state.score.to);
+  const d = parseDay(date);
+  const given = `Given this ${ordinal(d.getDate())} day of ${d.toLocaleDateString("en-PH", { month: "long" })}, ${d.getFullYear()} at San Vicente, Panabo City, Davao del Norte, Philippines.`;
+  const text = (r) => ({
+    teach: [`In heartfelt recognition of your exemplary performance as a teacher of San Vicente National High School. This award honors your excellent attendance and punctuality, your timely ILAW lesson plans and the care you give to your learners and classroom, earning the highest overall score of ${round1(r.overall)} among the teaching personnel ${period}.`,
+      "Your dedication to quality teaching and professional responsibility inspires both students and colleagues to embody character-driven excellence. We deeply appreciate your role in building a culture of commitment and excellence across our entire school community."],
+    non: [`In heartfelt recognition of your exemplary service as a non-teaching personnel of San Vicente National High School. This award honors your outstanding attendance, punctuality and adherence to the school uniform policy, earning the highest overall score of ${round1(r.overall)} ${period}.`,
+      "Your reliability and genuine commitment to service keep our daily school operations running smoothly. We deeply appreciate your role in cultivating a culture of trust, promptness and integrity across our entire school community."],
+    perfect: [`In heartfelt recognition of your exemplary dedication to upholding the core values of the DepEd W.A.T.C.H. Program at San Vicente National High School. This award honors your perfect attendance, outstanding punctuality and complete uniform, serving as a beacon of reliability and time consciousness in our daily school operations ${period}.`,
+      "Your genuine commitment to honesty and personal responsibility inspires both students and colleagues to embody character-driven excellence. We deeply appreciate your role in cultivating a culture of trust, promptness, and moral integrity across our entire school community."],
+    adviser: [`In heartfelt recognition of your exemplary leadership as class adviser of <b>${esc(r.p.advisory)}</b>, the cleanest classroom of Grade ${r.grade} in the Area of Responsibility (AOR) rating of San Vicente National High School, earning ${r.aorPts} AOR points ${period}.`,
+      "Your guidance in keeping a clean, orderly and caring learning space inspires your learners to take pride in their classroom. We deeply appreciate your role in cultivating a culture of discipline and responsibility across our entire school community."]
   }[k]);
-  const page = (r) => `<section class="cert"><div class="frame">
-      <img class="seal" src="${logo}" alt="">
-      <div class="gov">Republic of the Philippines · Department of Education<br>Region XI · Schools Division of Panabo City</div>
-      <div class="school">San Vicente National High School</div>
-      <div class="kind">Certificate of Recognition</div>
-      <div class="to">is proudly presented to</div>
-      <div class="name">${esc(r.p.name)}</div>
-      <div class="pos">${esc(r.p.position || "")}</div>
-      <div class="award">${aw.title}</div>
-      <p class="why">${reason(r)}, for the period ${period}.</p>
-      <p class="given">Given this ${given} at San Vicente National High School, Panabo City.</p>
-      <div class="sigs"><div><div class="line">${esc(signers.chair) || "&nbsp;"}</div><div class="role">Chair, PRAISE Committee</div></div>
-        <div><div class="line">${esc(signers.head) || "&nbsp;"}</div><div class="role">School Head</div></div></div>
+  const page = (r) => `<section class="cert">
+    <span class="tri tl"></span><span class="tri tl2"></span><span class="tri br"></span><span class="tri br2"></span>
+    <span class="sq sq1"></span><span class="sq sq2"></span><span class="sq sq3"></span><span class="sq sq4"></span>
+    <span class="dots d1"></span><span class="dots d2"></span><span class="arrow a1"></span><span class="arrow a2"></span>
+    <div class="body">
+      <div class="band">${k === "perfect"
+        ? `<div class="prog">Project W.A.T.C.H.</div><div class="tag">We Advocate Time Consciousness and Honesty</div>`
+        : `<div class="prog">BLESS PRAISE · ${esc(aw.title)}</div>`}
+        <div class="seals">${CERT_SEALS.map((x) => `<img src="${base + x}" alt="">`).join("")}</div></div>
+      <div class="title">Certificate of Recognition</div>
+      <div class="to">is awarded to</div>
+      <div class="name">${esc(String(r.p.name).replace(/\s*\(Demo\)\s*$/i, "").toUpperCase())}</div>
+      ${text(r).map((t) => `<p>${t}</p>`).join("")}
+      <p class="given">${given}</p>
+      <div class="sigs"><div><div class="sn">${esc(signers.name1) || "&nbsp;"}</div><div class="st">${esc(signers.title1)}</div></div>
+        <div><div class="sn">${esc(signers.name2) || "&nbsp;"}</div><div class="st">${esc(signers.title2)}</div></div></div>
     </div></section>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${aw.title} · ${period}</title><link rel="icon" href="${logo}">
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Great+Vibes&display=swap" rel="stylesheet">
+<title>${aw.title} · ${esc(periodText(state.score.from, state.score.to))}</title><link rel="icon" href="${base}logo.png">
+<link href="https://fonts.googleapis.com/css2?family=Lobster&family=Arimo:wght@400;700&family=Noto+Serif:wght@400;700&display=swap" rel="stylesheet">
 <style>
   @page { size: A4 landscape; margin: 0; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: #e2e8f0; font: 14px "Public Sans", system-ui, sans-serif; color: #1e293b; }
-  .toolbar { position: sticky; top: 0; z-index: 5; background: #0d2342; color: #fff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .toolbar button { font: 700 13px "Public Sans", sans-serif; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: #f59e0b; color: #0d2342; }
-  .cert { width: 297mm; height: 210mm; margin: 18px auto; background: #fff; padding: 9mm; box-shadow: 0 4px 24px rgba(15,23,42,.15); page-break-after: always; break-after: page; }
-  .frame { height: 100%; border: 3px solid #b8860b; outline: 1px solid #b8860b; outline-offset: -9px; padding: 12mm 18mm; text-align: center; display: flex; flex-direction: column; align-items: center;
-    background: radial-gradient(ellipse at center, #fffdf6 0%, #fff 70%); }
-  .seal { width: 22mm; height: 22mm; border-radius: 50%; }
-  .gov { margin-top: 3mm; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #475569; line-height: 1.5; }
-  .school { font: 700 20px "Playfair Display", serif; color: #0d2342; margin-top: 1mm; }
-  .kind { font: 700 34px "Playfair Display", serif; color: #b8860b; letter-spacing: .04em; text-transform: uppercase; margin-top: 6mm; }
-  .to { font-style: italic; color: #475569; margin-top: 3mm; }
-  .name { font: 46px "Great Vibes", "Playfair Display", serif; color: #0d2342; margin-top: 2mm; border-bottom: 1px solid #cbd5e1; padding: 0 12mm 1mm; }
-  .pos { font-size: 12px; color: #64748b; margin-top: 1mm; }
-  .award { font: 700 22px "Playfair Display", serif; color: #1e3a8a; margin-top: 4mm; }
-  .why { max-width: 200mm; margin: 3mm auto 0; line-height: 1.55; }
-  .given { margin-top: 2mm; color: #475569; }
-  .sigs { margin-top: auto; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; padding: 0 18mm; }
-  .line { border-bottom: 1px solid #1e293b; font-weight: 700; padding-bottom: 1mm; min-height: 6mm; text-transform: uppercase; }
-  .role { font-size: 12px; color: #475569; margin-top: 1mm; }
+  body { margin: 0; background: #e2e8f0; font: 15px "Arimo", Arial, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .toolbar { position: sticky; top: 0; z-index: 9; background: #0d2342; color: #fff; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+  .toolbar button { font: 700 13px Arimo, sans-serif; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: #f5b400; color: #0d2342; }
+  .cert { position: relative; overflow: hidden; width: 297mm; height: 210mm; margin: 18px auto; background: #fff; box-shadow: 0 4px 24px rgba(15,23,42,.15); page-break-after: always; break-after: page; }
+  /* frame: thin gold line inside the page */
+  .cert::before { content: ""; position: absolute; inset: 9mm 11mm; border: 1.4mm solid #f5b400; border-left-width: 1.4mm; border-right-width: 1.4mm; }
+  .tri { position: absolute; width: 0; height: 0; }
+  .tl { top: 0; left: 0; border-top: 46mm solid #b8741a; border-right: 46mm solid transparent; }
+  .tl2 { top: 0; left: 18mm; border-top: 24mm solid #f5b400; border-right: 30mm solid transparent; opacity: .9; }
+  .br { bottom: 0; right: 0; border-bottom: 46mm solid #b8741a; border-left: 46mm solid transparent; }
+  .br2 { bottom: 0; right: 20mm; border-bottom: 34mm solid #f5b400; border-left: 40mm solid transparent; }
+  .sq { position: absolute; width: 16mm; height: 16mm; border: 1.3mm solid #f5b400; }
+  .sq1 { top: 14mm; right: 16mm; } .sq2 { top: 22mm; right: 8mm; border-color: #f0a500; }
+  .sq3 { bottom: 14mm; left: 16mm; } .sq4 { bottom: 22mm; left: 8mm; border-color: #f0a500; }
+  .dots { position: absolute; width: 24mm; height: 14mm; background-image: radial-gradient(#b0b0b0 0.45mm, transparent 0.5mm); background-size: 3mm 3mm; }
+  .d1 { top: 6mm; right: 40mm; } .d2 { bottom: 6mm; left: 36mm; }
+  .arrow { position: absolute; width: 0; height: 0; border-top: 5mm solid transparent; border-bottom: 5mm solid transparent; }
+  .a1 { top: 9mm; right: 58mm; border-left: 9mm solid #f5b400; } .a2 { bottom: 9mm; left: 60mm; border-right: 9mm solid #f5b400; }
+  .body { position: relative; z-index: 2; height: 100%; padding: 12mm 30mm 15mm; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .band { background: #fde100; padding: 3mm 10mm 3.5mm; min-width: 92mm; }
+  .prog { font: 700 13px Arimo, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: #1d3c8f; }
+  .tag { font: italic 10px Arimo, sans-serif; color: #333; }
+  .seals { margin: 2mm auto 0; width: fit-content; display: flex; gap: 4mm; justify-content: center; background: #fff; padding: 2mm 4mm; }
+  .seals img { width: 20mm; height: 20mm; object-fit: contain; border-radius: 50%; }
+  .title { font: 52px "Lobster", cursive; margin-top: 4mm; line-height: 1; }
+  .to { font-size: 14px; margin-top: 2mm; }
+  .name { font-size: 38px; letter-spacing: .02em; margin-top: 3mm; padding: 0 6mm 1mm; border-bottom: 1.2px solid #111; }
+  p { margin: 4mm 0 0; max-width: 232mm; line-height: 1.4; }
+  p + p { margin-top: 3mm; }
+  .given { font: 15px "Noto Serif", Georgia, serif; margin-top: 4mm; }
+  .sigs { margin-top: auto; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 40mm; padding: 0 22mm; }
+  .sn { font: 700 15px "Noto Serif", Georgia, serif; text-transform: uppercase; letter-spacing: .02em; }
+  .st { font: 14px "Noto Serif", Georgia, serif; }
   @media print { body { background: #fff; } .toolbar { display: none; } .cert { margin: 0; box-shadow: none; } }
 </style></head><body>
-<div class="toolbar"><span><b>${aw.title}</b> · ${aw.people.length} certificate${aw.people.length === 1 ? "" : "s"} · ${period}</span><button onclick="window.print()">Print / Save as PDF</button></div>
+<div class="toolbar"><span><b>${aw.title}</b> · ${aw.people.length} certificate${aw.people.length === 1 ? "" : "s"}</span><button onclick="window.print()">Print / Save as PDF</button></div>
 ${aw.people.map(page).join("\n")}
 </body></html>`;
 }
