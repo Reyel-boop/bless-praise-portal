@@ -206,13 +206,14 @@ async function onUser(u) {
   }
 
   if (isAdmin) {
-    state.unsubs.push(onSnapshot(collection(db, "applications"), (snap) => {
+    const demoQ = (col) => (isDemoEmail(u.email) ? query(collection(db, col), where("demo", "==", true)) : collection(db, col));
+    state.unsubs.push(onSnapshot(demoQ("applications"), (snap) => {
       state.apps = {};
       snap.forEach((d) => { state.apps[d.id] = { ...d.data(), uid: d.data().uid || d.id, id: d.id }; });
       state.loaded = true;
       render();
     }, (e) => toast(errorText(e), "error")));
-    state.unsubs.push(onSnapshot(collection(db, "reviews"), (snap) => {
+    state.unsubs.push(onSnapshot(demoQ("reviews"), (snap) => {
       state.reviews = {};
       snap.forEach((d) => { state.reviews[d.id] = d.data(); });
       render();
@@ -253,6 +254,8 @@ function syncCurrent() {
 }
 const appIdFor = (key) => `${state.user.uid}_${key}`;
 const myAppFor = (key) => myAppList().find((a) => a.award === key);
+
+const isDemoEmail = (e) => /@svnhs-demo\.ph$/i.test(e || "");
 
 const myName = () => (state.profile && state.profile.name) || (state.user && state.user.displayName) || (state.user && state.user.email) || "";
 
@@ -343,9 +346,9 @@ function field(id, label, type = "text", extra = "") {
     <input id="${id}" name="${id}" type="${type}" ${extra} class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>`;
 }
 
-// Public demo logins shown on the sign-in page. Demo accounts only see demo records (firestore.rules);
-// the demo Admin login can see every application, so it is not listed.
+// Public demo logins shown on the sign-in page. Demo accounts only see and change demo records (firestore.rules).
 const DEMO_LOGINS = [
+  { role: "Admin", text: "PRAISE Committee: applicants and reviews, staff access, and reports from all monitoring (attendance, AOR, ILAW)", email: "demo.admin@svnhs-demo.ph", password: "Demo-Admin-2026" },
   { role: "Head / Master Teacher", text: "Rose Aquino: weekly ILAW lesson plan check per subject area and teacher, and the ILAW report", email: "demo.headteacher@svnhs-demo.ph", password: "Demo-HeadTeacher-2026" },
   { role: "School Clinic", text: "Carmen Lopez: weekly AOR cleanest classroom ratings and the AOR report", email: "demo.clinic@svnhs-demo.ph", password: "Demo-Clinic-2026" },
   { role: "HR", text: "Maria Santos: attendance sheet, month view, personnel and the monthly attendance report", email: "demo.hr@svnhs-demo.ph", password: "Demo-HR-2026" },
@@ -581,7 +584,7 @@ async function savePick(key) {
   try {
     await setDoc(doc(db, "applications", id), {
       uid: state.user.uid, name: myName(), dept: (state.profile && state.profile.dept) || "",
-      award: key, items: general, ...(other && other.folder ? { folder: other.folder } : {}),
+      award: key, items: general, ...(other && other.folder ? { folder: other.folder } : {}), ...demoMark(),
       createdAt: serverTimestamp(), updatedAt: serverTimestamp()
     });
     state.cur = id;
@@ -1033,7 +1036,7 @@ function renderReview() {
 
 async function setVerified(map) {
   try {
-    await setDoc(doc(db, "reviews", state.selected), { verified: map, updatedAt: serverTimestamp() }, { merge: true });
+    await setDoc(doc(db, "reviews", state.selected), { verified: map, updatedAt: serverTimestamp(), ...demoMark() }, { merge: true });
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -1048,7 +1051,7 @@ async function saveDecision() {
   const remarks = draft.remarks !== undefined ? draft.remarks : review.remarks || "";
   try {
     await setDoc(doc(db, "reviews", uid), {
-      status, remarks, reviewer: state.user.email, reviewedAt: serverTimestamp(), updatedAt: serverTimestamp()
+      status, remarks, reviewer: state.user.email, reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(), ...demoMark()
     }, { merge: true });
     delete state.drafts[uid];
     toast(`Saved: ${STATUS[status].label}`);
@@ -1548,7 +1551,7 @@ async function cancelRequest() {
 
 // Live listeners, replaced when the month / week changes and dropped on sign-out.
 // Public demo accounts (…@svnhs-demo.ph) work only on records marked demo: true; firestore.rules enforces it.
-const isDemoUser = () => /@svnhs-demo\.ph$/i.test((state.user && state.user.email) || "");
+const isDemoUser = () => isDemoEmail(state.user && state.user.email);
 const demoOnly = (...w) => (isDemoUser() ? [where("demo", "==", true), ...w] : w);
 const demoMark = () => (isDemoUser() ? { demo: true } : {});
 const aorDocId = (week) => (isDemoUser() ? `demo-${week}` : week);
@@ -1569,8 +1572,8 @@ function startMonitoring() {
   if (p.clinic) watch("aor", query(collection(db, "aor"), ...demoOnly()), (d) => {
     state.aor = Object.fromEntries(Object.values(d).filter((x) => isDay(x.week) && !!x.demo === isDemoUser()).map((x) => [x.week, x]));
   });
-  if (p.admin) watch("monitors", collection(db, "monitors"), (d) => { state.monitors = d; });
-  if (p.admin) watch("requests", collection(db, "accessRequests"), (d) => { state.requests = d; });
+  if (p.admin) watch("monitors", query(collection(db, "monitors"), ...demoOnly()), (d) => { state.monitors = d; });
+  if (p.admin) watch("requests", query(collection(db, "accessRequests"), ...demoOnly()), (d) => { state.requests = d; });
   if (p.hr) watchAttendance();
   if (p.dll) watchDll();
 }
@@ -2351,7 +2354,8 @@ async function saveAccess(id) {
   const data = { name: val("access-name").slice(0, 120), ...roles, by: state.user.email, updatedAt: serverTimestamp() };
   try {
     const b = writeBatch(db);
-    b.set(doc(db, "monitors", email), data);
+    if (isDemoUser() && !isDemoEmail(email)) return toast("The demo account can only give access to demo emails (…@svnhs-demo.ph).", "warn");
+    b.set(doc(db, "monitors", email), { ...data, ...demoMark() });
     if (state.requests[email]) b.delete(doc(db, "accessRequests", email));
     await b.commit();
     closeModal();

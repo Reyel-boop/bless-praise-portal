@@ -43,7 +43,7 @@ service cloud.firestore {
 
     function validApplication(uid) {
       let d = request.resource.data;
-      return d.keys().hasOnly(['uid', 'name', 'dept', 'award', 'items', 'folder', 'checkedAt', 'submittedAt', 'endorser', 'createdAt', 'updatedAt'])
+      return d.keys().hasOnly(['uid', 'name', 'dept', 'award', 'items', 'folder', 'checkedAt', 'submittedAt', 'endorser', 'demo', 'createdAt', 'updatedAt'])
         && d.uid == uid
         && d.award in awardKeys()
         && (!('folder' in d) || (d.folder is string && d.folder.size() <= 300))
@@ -68,9 +68,9 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if isOwner(uid) || isAdmin();
+      allow read: if isOwner(uid) || (isAdmin() && demoOk(resource.data));
       allow create, update: if isOwner(uid)
-        && request.resource.data.keys().hasOnly(['name', 'position', 'dept', 'email', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'position', 'dept', 'email', 'demo', 'createdAt'])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120;
       allow delete: if false;
@@ -79,7 +79,7 @@ service cloud.firestore {
     // One application per award: ID = <uid>_<award> (older ones use just the uid). The owner is in d.uid.
     function ownsApp(d) { return verified() && d.uid == request.auth.uid; }
     match /applications/{id} {
-      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || (isAdmin() && demoOk(resource.data));
       allow create: if ownsApp(request.resource.data) && validApplication(request.auth.uid)
         && id == request.auth.uid + '_' + request.resource.data.award
         && awardFits(request.auth.uid, request.resource.data.award);
@@ -92,12 +92,13 @@ service cloud.firestore {
             || (request.resource.data.award == resource.data.award
                 && (request.resource.data.items == resource.data.items || reopened(id))));
       // Teachers can remove an award they haven't submitted; admins can delete any application.
-      allow delete: if isAdmin() || (ownsApp(resource.data) && resource.data.get('submittedAt', null) == null);
+      allow delete: if (isAdmin() && demoOk(resource.data)) || (ownsApp(resource.data) && resource.data.get('submittedAt', null) == null);
     }
 
     match /reviews/{id} {
-      allow read: if isAdmin() || (verified() && (id == request.auth.uid || id.matches(request.auth.uid + '_cat-[a-z]+-[0-9]+')));
-      allow write: if isAdmin();
+      allow read: if (isAdmin() && demoOk(resource.data)) || (verified() && (id == request.auth.uid || id.matches(request.auth.uid + '_cat-[a-z]+-[0-9]+')));
+      allow create, update: if isAdmin() && demoOk(request.resource.data) && (resource == null || demoOk(resource.data));
+      allow delete: if isAdmin() && demoOk(resource.data);
     }
 
     // ---------- Monitoring ----------
@@ -115,10 +116,12 @@ service cloud.firestore {
     function str(v, max) { return v is string && v.size() <= max; }
 
     match /monitors/{email} {
-      allow get: if (signedIn() && request.auth.token.email == email) || isAdmin();
-      allow list, delete: if isAdmin();
-      allow create, update: if isAdmin()
-        && request.resource.data.keys().hasOnly(['name', 'hr', 'clinic', 'dll', 'subjects', 'by', 'updatedAt'])
+      allow get: if (signedIn() && request.auth.token.email == email) || (isAdmin() && demoOk(resource.data));
+      allow list, delete: if isAdmin() && demoOk(resource.data);
+      // Demo admins may only give access to demo emails.
+      allow create, update: if isAdmin() && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
+        && (!isDemo() || email.matches('.*@svnhs-demo[.]ph$'))
+        && request.resource.data.keys().hasOnly(['name', 'hr', 'clinic', 'dll', 'subjects', 'by', 'demo', 'updatedAt'])
         && str(request.resource.data.name, 120)
         && request.resource.data.hr is bool && request.resource.data.clinic is bool && request.resource.data.dll is bool
         && request.resource.data.subjects is list && request.resource.data.subjects.hasOnly(subjects());
@@ -127,9 +130,9 @@ service cloud.firestore {
     // Someone asking for Monitoring access (at sign-up or later). Only for their own email;
     // nothing is granted until an admin approves it into monitors/{email}.
     match /accessRequests/{email} {
-      allow get: if (signedIn() && request.auth.token.email == email) || isAdmin();
-      allow list: if isAdmin();
-      allow delete: if isAdmin() || (signedIn() && request.auth.token.email == email);
+      allow get: if (signedIn() && request.auth.token.email == email) || (isAdmin() && demoOk(resource.data));
+      allow list: if isAdmin() && demoOk(resource.data);
+      allow delete: if (isAdmin() && demoOk(resource.data)) || (signedIn() && request.auth.token.email == email);
       allow create, update: if signedIn() && request.auth.token.email == email
         && request.resource.data.keys().hasOnly(['name', 'email', 'position', 'hr', 'clinic', 'dll', 'subjects', 'createdAt'])
         && request.resource.data.email == email
