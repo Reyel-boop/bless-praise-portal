@@ -1483,6 +1483,17 @@ function attendanceSummary(recs) {
 // 75 → "1 h 15 min"
 const fmtMins = (m) => (!m ? "—" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`);
 
+// Tardiness: HR enters the time in; minutes late are counted from the official start of the school day.
+const SCHOOL_START = "07:30";
+const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m; };
+const minutesLate = (timeIn) => (/^\d{2}:\d{2}$/.test(timeIn || "") ? Math.max(0, toMins(timeIn) - toMins(SCHOOL_START)) : 0);
+function lateText(timeIn, savedMinutes = 0) {
+  if (!timeIn) return savedMinutes ? `${fmtMins(savedMinutes)} late (no time in recorded)` : `Enter the time in. Minutes late are counted from ${fmtTime(SCHOOL_START)}.`;
+  const m = minutesLate(timeIn);
+  return m ? `${m} minute${m === 1 ? "" : "s"} late${m >= 60 ? ` (${fmtMins(m)})` : ""} · class starts at ${fmtTime(SCHOOL_START)}`
+    : `Not late: ${fmtTime(timeIn)} is on or before ${fmtTime(SCHOOL_START)}.`;
+}
+
 function attRecord(r) {
   if (r.type === "uniform") return chip("No proper uniform", "bg-violet-50 text-violet-800 border-violet-200");
   if (r.type === "absent") {
@@ -1739,10 +1750,12 @@ function openAttendance(id, pre = {}) {
         </div>
         ${r ? "" : `<p class="text-[11px] text-slate-500">For several days, also set <strong>To</strong>. Saturdays and Sundays in between are skipped.</p>`}
       </div>
-      <div id="att-late" class="grid grid-cols-1 sm:grid-cols-3 gap-3 ${type === "late" ? "" : "hidden"}">
-        ${field("att-date", "Date", "date", `value="${day}"`)}
-        ${field("att-time", "Time in", "time", `value="${r ? esc(r.timeIn || "") : ""}"`)}
-        ${field("att-min", "Minutes late", "number", `min="1" max="600" value="${r && r.minutes ? r.minutes : ""}"`)}
+      <div id="att-late" class="space-y-2 ${type === "late" ? "" : "hidden"}">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${field("att-date", "Date", "date", `value="${day}"`)}
+          ${field("att-time", "Time in", "time", `data-act="att-time" value="${r ? esc(r.timeIn || "") : ""}"`)}
+        </div>
+        <div id="att-late-calc" class="text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">${lateText(r ? r.timeIn : "", r && !r.timeIn ? r.minutes : 0)}</div>
       </div>
       <div id="att-uniform" class="space-y-2 ${type === "uniform" ? "" : "hidden"}">
         ${field("att-udate", "Date", "date", `value="${day}"`)}
@@ -1780,11 +1793,13 @@ async function saveAttendance(id) {
   } else if (type === "late") {
     const date = val("att-date");
     if (!isDay(date)) return toast("Pick the date.", "warn");
-    const minutes = parseInt(val("att-min"), 10);
     const timeIn = val("att-time");
-    if (!(minutes > 0) && !timeIn) return toast("Enter the time in or the minutes late.", "warn");
+    // Older records saved minutes without a time in; keep those when the time isn't given.
+    const minutes = timeIn ? minutesLate(timeIn) : old && old.type === "late" ? old.minutes : 0;
+    if (!timeIn && !minutes) return toast("Enter the time in.", "warn");
+    if (!(minutes > 0)) return toast(`${fmtTime(timeIn)} is not late. Class starts at ${fmtTime(SCHOOL_START)}.`, "warn");
     dates = [date];
-    Object.assign(base, { kind: "", duration: "", timeIn, minutes: minutes > 0 ? Math.min(minutes, 600) : 0 });
+    Object.assign(base, { kind: "", duration: "", timeIn, minutes: Math.min(minutes, 600) });
   } else if (type === "uniform") {
     const date = val("att-udate");
     if (!isDay(date)) return toast("Pick the date.", "warn");
@@ -2566,6 +2581,7 @@ document.addEventListener("input", (e) => {
   if (el.dataset.act === "filter" && el.tagName === "INPUT") { state.filter.q = el.value; render(); }
   if (el.dataset.act === "mon-q") { state.mon.q = el.value; render(); }
   if (el.dataset.act === "dll-remarks") { (state.dllDrafts[el.dataset.pid] ||= {}).remarks = el.value; render(); }
+  if (el.dataset.act === "att-time") $("#att-late-calc").innerHTML = lateText(el.value);
 });
 
 document.addEventListener("submit", (e) => {
