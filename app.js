@@ -7,7 +7,7 @@ import {
   getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where,
   serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
+import { firebaseConfig, driveApiKey } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES } from "./data.js";
 
@@ -140,7 +140,7 @@ const state = {
   apps: {}, reviews: {}, selected: null, drafts: {},
   filter: { q: "", award: "", status: "" },
   tab: "main", authMode: "login", unsubs: [],
-  linkDrafts: {},
+  linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
   perms: null, mon: null, rep: null, request: null, me: null, meLoaded: false,
   personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
@@ -164,7 +164,7 @@ async function onUser(u) {
   Object.values(state.watches).forEach((f) => f());
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false,
-    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {},
+    apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
     perms: null, mon: freshMon(), rep: freshRep(), request: null, me: null, meLoaded: false,
     personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
@@ -553,9 +553,43 @@ async function savePick(key) {
 }
 
 // ----- Awardee: MOVs checklist -----
-// Links must point to Google Drive / Docs.
-const savedLink = (key) => ((state.app.items || {})[key] || {}).link || "";
-const draftLink = (key) => (state.linkDrafts[key] !== undefined ? state.linkDrafts[key] : savedLink(key));
+// Each teacher keeps every MOV in ONE Google Drive folder, shared "Anyone with the link", with each file
+// named to a set format. The portal lists the exact file names, then reads the folder (Drive API) and
+// marks each MOV found, wrongly named, or missing.
+
+// File name: <code>_<SURNAME-Initial>_<Short-Title>.<any extension>, e.g. G01_REYES-J_Nomination-Form.pdf
+const NAME_PARTICLES = new Set(["de", "del", "dela", "la", "las", "los", "delos", "san", "santa", "sta", "sto", "van", "von", "da", "di", "dos"]);
+const NAME_SUFFIX = /^(jr|sr|ii|iii|iv|v)\.?$/i;
+function nameTag(full) {
+  const w = String(full || "").replace(/\([^)]*\)/g, " ").replace(/,/g, " ").split(/\s+/).filter((x) => x && !NAME_SUFFIX.test(x));
+  if (!w.length) return "NAME";
+  let i = w.length - 1;
+  while (i > 1 && NAME_PARTICLES.has(w[i - 1].toLowerCase())) i--;
+  const clean = (t) => t.normalize("NFD").replace(/[^A-Za-z]/g, "");
+  const surname = w.slice(i).map(clean).join("").toUpperCase() || "NAME";
+  return w.length > 1 ? `${surname}-${clean(w[0]).charAt(0).toUpperCase()}` : surname;
+}
+const TITLE_SKIP = new Set(["of", "the", "and", "or", "a", "an", "to", "in", "on", "for", "by", "as", "all", "containing", "submitted", "latest", "updated", "accomplished", "recent", "if", "applicable"]);
+function shortTitle(text) {
+  const words = String(text).replace(/\([^)]*\)/g, " ").split("/")[0].split(/\s+/)
+    .map((w) => w.replace(/[^A-Za-z0-9]/g, "")).filter((w) => w && !TITLE_SKIP.has(w.toLowerCase()));
+  return words.slice(0, 3).map((w) => (w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1))).join("-") || "MOV";
+}
+const movCode = (cat, i) => `${cat === GENERAL ? "G" : "A"}${pad(i + 1)}`;
+function movRows(app) {
+  const tag = nameTag(app.name);
+  return [GENERAL, app.award].flatMap((cat) => CATEGORIES[cat].items.map((text, i) => {
+    const code = movCode(cat, i);
+    return { key: `${cat}_${i}`, cat, i, text, code, file: `${code}_${tag}_${shortTitle(text)}` };
+  }));
+}
+const baseName = (n) => String(n).replace(/\.[A-Za-z0-9]{1,5}$/, "").trim().toLowerCase();
+const folderId = (u) => {
+  const m = String(u || "").trim().match(/^https:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?folders\/|open\?(?:\S*&)?id=)([A-Za-z0-9_-]{20,})/);
+  return m ? m[1] : "";
+};
+
+const savedItem = (key) => (state.app.items || {})[key] || {};
 // Teachers edit freely before submitting; afterwards only when the committee sends it back.
 function canEditLinks() {
   if (!state.app.submittedAt) return true;
@@ -564,9 +598,58 @@ function canEditLinks() {
 }
 function linkReadiness() {
   const rows = checklist(state.app.award);
-  const ready = rows.filter((r) => isDriveUrl(draftLink(r.key).trim())).length;
-  const unsaved = rows.filter((r) => draftLink(r.key).trim() !== savedLink(r.key)).length;
-  return { total: rows.length, ready, unsaved, all: ready === rows.length };
+  const ready = rows.filter((r) => hasLink(savedItem(r.key))).length;
+  return { total: rows.length, ready, all: ready === rows.length };
+}
+
+// Read the folder and match each required file name.
+async function checkFolder() {
+  if (!canEditLinks()) return toast("Your files are locked while the committee reviews.", "warn");
+  const link = (state.folderDraft ?? state.app.folder ?? "").trim();
+  const id = folderId(link);
+  if (!id) return toast("Paste the link of your Google Drive folder (it has /folders/ in it).", "warn");
+  state.checking = true;
+  render();
+  try {
+    const files = [];
+    let page = "";
+    do {
+      const q = encodeURIComponent(`'${id}' in parents and trashed = false`);
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,webViewLink,size)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&key=${driveApiKey}${page ? `&pageToken=${page}` : ""}`);
+      const j = await r.json();
+      if (!r.ok) throw Object.assign(new Error("drive"), { status: r.status });
+      files.push(...(j.files || []).filter((f) => f.mimeType !== "application/vnd.google-apps.folder"));
+      page = j.nextPageToken || "";
+    } while (page);
+    const rows = movRows(state.app);
+    const used = new Set();
+    const items = {}, wrong = {};
+    for (const r of rows) {
+      const hit = files.find((f) => !used.has(f.id) && baseName(f.name) === r.file.toLowerCase());
+      if (hit) {
+        used.add(hit.id);
+        items[r.key] = { submitted: true, link: hit.webViewLink || `https://drive.google.com/file/d/${hit.id}/view`, name: hit.name };
+      } else {
+        items[r.key] = { submitted: false, link: "" };
+        // Same MOV number but a different name (e.g. "G03 scan.pdf"): tell them to rename it.
+        const near = files.find((f) => !used.has(f.id) && new RegExp(`^${r.code}(?![0-9])`, "i").test(f.name.trim()));
+        if (near) { used.add(near.id); wrong[r.key] = near.name; }
+      }
+    }
+    const extra = files.filter((f) => !used.has(f.id)).map((f) => f.name);
+    await updateDoc(doc(db, "applications", state.user.uid), { folder: link, items, checkedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    state.folderDraft = null;
+    state.folderCheck = { wrong, extra, count: files.length };
+    const found = Object.values(items).filter((x) => x.submitted).length;
+    toast(`Checked: ${found} of ${rows.length} files found.`, found === rows.length ? "ok" : "warn");
+  } catch (e) {
+    toast(e.status === 404 || e.status === 403
+      ? "Can't open that folder. In Google Drive, click Share → General access → Anyone with the link, then check again."
+      : errorText(e), "error");
+  } finally {
+    state.checking = false;
+    render();
+  }
 }
 
 function renderAwardee() {
@@ -579,46 +662,56 @@ function renderAwardee() {
   const g = groupOf(app.award);
   const ver = (review && review.verified) || {};
   const rd = linkReadiness();
+  const rows = movRows(app);
+  const chk = state.folderCheck || { wrong: {}, extra: [] };
+  const folder = state.folderDraft ?? app.folder ?? "";
+  const copyBtn = (text) => `<button data-act="copy-name" data-text="${esc(text)}" title="Copy file name" class="flex-shrink-0 p-1 rounded text-slate-400 hover:text-depedGold-500 hover:bg-blue-50"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>`;
 
-  const rowState = (key) => {
-    const d = draftLink(key).trim(), s = savedLink(key);
-    if (d && !isDriveUrl(d)) return `<span class="text-red-700 font-semibold">Not a valid Google Drive link. In Drive, click Share → Copy link, then paste it here.</span>`;
-    if (d !== s) return `<span class="text-amber-700 font-semibold">Not saved yet. Click Save.</span>`;
-    if (s) return `<span class="text-blue-700 font-semibold inline-flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i>Saved</span>`;
-    return `<span class="text-slate-400">No link yet</span>`;
-  };
+  const folderBox = `<div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5">
+      <div class="flex items-center gap-2"><i data-lucide="folder-open" class="w-5 h-5 text-depedGold-500"></i><h3 class="text-base font-bold text-slate-900">Your Google Drive folder</h3></div>
+      <ol class="mt-3 space-y-1 text-sm text-slate-600 list-decimal pl-5">
+        <li>Make <strong class="text-slate-800">one folder</strong> in Google Drive for your MOVs.</li>
+        <li>Put one file per MOV in it, named <strong class="text-slate-800">exactly</strong> as listed below. Any file type is fine (PDF, JPG, Word…).</li>
+        <li>Share the folder: <strong class="text-slate-800">General access → Anyone with the link</strong> (Viewer).</li>
+        <li>Paste the folder link here and click <strong class="text-slate-800">Check files</strong>. Check again after adding or renaming files.</li>
+      </ol>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <input id="folder-link" data-act="folder" type="url" value="${esc(folder)}" placeholder="https://drive.google.com/drive/folders/…" ${editable ? "" : "disabled"}
+          class="flex-1 min-w-[220px] text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500">
+        ${editable ? `<button data-act="check-folder" ${state.checking ? "disabled" : ""} class="${btnDark}"><i data-lucide="${state.checking ? "loader" : "scan-search"}" class="w-4 h-4 ${state.checking ? "animate-spin" : ""}"></i>${state.checking ? "Checking…" : "Check files"}</button>` : ""}
+        ${app.folder ? `<a href="${esc(app.folder)}" target="_blank" rel="noopener noreferrer" class="${btnLight}"><i data-lucide="external-link" class="w-4 h-4"></i>Open folder</a>` : ""}
+      </div>
+      <p class="mt-2 text-xs text-slate-500">${app.checkedAt ? `Last checked ${fmtDate(app.checkedAt)} · <strong class="text-slate-700">${rd.ready} of ${rd.total}</strong> files found.` : "Not checked yet."}</p>
+      ${chk.extra.length ? `<div class="mt-3 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"><strong>Not matched to any MOV:</strong> ${chk.extra.map((n) => `<code class="px-1 rounded bg-white/70">${esc(n)}</code>`).join(", ")}. Rename them using the names below.</div>` : ""}
+    </div>`;
 
   const part = (cat, heading) => {
-    const list = CATEGORIES[cat].items;
-    const done = list.filter((_, i) => isDriveUrl(savedLink(`${cat}_${i}`))).length;
+    const list = rows.filter((r) => r.cat === cat);
+    const done = list.filter((r) => hasLink(savedItem(r.key))).length;
     return `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
         <h3 class="text-sm font-bold text-slate-800">${heading}</h3>
-        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} saved</span>
+        <span class="tabular text-[11px] font-bold px-2 py-0.5 rounded-full border ${done === list.length ? "bg-blue-600 text-white border-blue-700" : "bg-blue-50 text-blue-800 border-blue-200"}">${done}/${list.length} found</span>
       </div>
       <div class="divide-y divide-slate-100">
-        ${list.map((text, i) => {
-          const key = `${cat}_${i}`;
-          const ok = ver[key];
-          const d = draftLink(key);
-          const s = savedLink(key);
-          const dirty = d.trim() !== s;
-          const bad = d.trim() && !isDriveUrl(d.trim());
+        ${list.map((r) => {
+          const it = savedItem(r.key), ok = ver[r.key], found = hasLink(it), bad = chk.wrong[r.key];
+          const status = found
+            ? `<a href="${esc(it.link)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-emerald-700 font-semibold hover:underline"><i data-lucide="check" class="w-3.5 h-3.5"></i>Found${it.name ? `: ${esc(it.name)}` : ""}</a>`
+            : bad ? `<span class="text-red-700 font-semibold">Wrong name: <code class="px-1 rounded bg-red-50">${esc(bad)}</code>. Rename it to the name above.</span>`
+            : app.checkedAt ? `<span class="text-amber-700 font-semibold">Missing from your folder</span>` : `<span class="text-slate-400">Not checked yet</span>`;
           return `<div class="p-3 sm:px-4 ${ok ? "bg-emerald-50/60" : ""}">
             <div class="flex items-start justify-between gap-3">
-              <div class="text-sm font-medium text-slate-800 min-w-0"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
+              <div class="text-sm font-medium text-slate-800 min-w-0"><span class="tabular font-mono text-xs text-slate-400 mr-1">${r.code}</span>${esc(r.text)}</div>
               ${ok
                 ? `<span class="flex-shrink-0 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white"><i data-lucide="check-check" class="w-3 h-3"></i>Verified</span>`
                 : `<span class="flex-shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Pending</span>`}
             </div>
-            <div class="mt-2 flex items-center gap-2">
-              <input id="link-${key}" data-act="link" data-key="${key}" type="url" value="${esc(d)}" placeholder="Paste Google Drive link" ${editable ? "" : "disabled"}
-                class="flex-1 min-w-0 text-xs px-2.5 py-2 rounded-md border ${bad ? "border-red-400 bg-red-50/40" : dirty ? "border-amber-400" : "border-slate-300"} focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500">
-              ${editable ? `<button data-act="save-link" data-key="${key}" ${dirty && !bad ? "" : "disabled"}
-                class="flex-shrink-0 px-3.5 py-2 rounded-md text-xs font-bold transition ${dirty && !bad ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm" : "bg-slate-100 text-slate-400 cursor-not-allowed"}">Save</button>` : ""}
-              ${isDriveUrl(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 text-xs font-semibold text-depedGold-500 hover:underline">Open</a>` : ""}
+            <div class="mt-1.5 flex items-center gap-1.5 min-w-0">
+              <i data-lucide="file" class="w-3.5 h-3.5 text-slate-400 flex-shrink-0"></i>
+              <code class="min-w-0 truncate text-xs font-semibold text-brand-950 bg-brand-100 rounded px-1.5 py-0.5">${esc(r.file)}<span class="text-slate-400">.pdf</span></code>${copyBtn(r.file)}
             </div>
-            <div class="mt-1 text-[11px]">${rowState(key)}</div>
+            <div class="mt-1 text-xs">${status}</div>
           </div>`;
         }).join("")}
       </div>
@@ -628,15 +721,15 @@ function renderAwardee() {
   const submitBox = () => {
     if (app.submittedAt && !reopened) {
       return `<div class="text-xs text-slate-500 border-t border-slate-100 pt-3">Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}
-        <br><span class="inline-flex items-center gap-1 mt-1 font-semibold text-slate-600"><i data-lucide="lock" class="w-3 h-3"></i>Links are locked while the committee reviews.</span></div>`;
+        <br><span class="inline-flex items-center gap-1 mt-1 font-semibold text-slate-600"><i data-lucide="lock" class="w-3 h-3"></i>Files are locked while the committee reviews. Don't rename or delete them.</span></div>`;
     }
     return `<div class="flex flex-col gap-2 pt-1">
-      ${reopened ? `<div class="text-xs font-semibold text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">The committee reopened your application. Fix the links, then resubmit.</div>` : ""}
+      ${reopened ? `<div class="text-xs font-semibold text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">The committee reopened your application. Fix the files in your folder, click Check files, then resubmit.</div>` : ""}
       <button data-act="open-submit" ${rd.all ? "" : "disabled"} class="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold shadow transition ${rd.all ? "bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors" : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"}">
         <i data-lucide="${rd.all ? "send" : "lock"}" class="w-4 h-4"></i>${reopened ? "Resubmit" : "Submit for review"}</button>
       <p class="text-[11px] text-center ${rd.all ? "text-emerald-700 font-semibold" : "text-slate-500"}">${rd.all
-        ? `All ${rd.total} MOVs have a link.${rd.unsaved ? ` ${rd.unsaved} unsaved will be saved when you submit.` : ""}`
-        : `Add a Google Drive link to <strong class="text-slate-700">all ${rd.total} MOVs</strong> to submit. <span class="tabular">${rd.ready}/${rd.total}</span> done.`}</p>
+        ? `All ${rd.total} files are in your folder.`
+        : `All <strong class="text-slate-700">${rd.total} files</strong> must be in your folder to submit. <span class="tabular">${rd.ready}/${rd.total}</span> found.`}</p>
       ${app.submittedAt ? "" : `<button data-act="change-award" class="text-xs font-semibold text-slate-500 hover:text-slate-800">Change award</button>`}
     </div>`;
   };
@@ -650,7 +743,7 @@ function renderAwardee() {
           ${a.local ? `<div class="font-serif italic text-depedGold-600">${esc(a.local)}</div>` : ""}
           <div class="mt-2">${pill(st)}</div>
         </div>
-        ${bar("Saved links", p.sub, p.total, BLUE)}
+        ${bar("Files found", p.sub, p.total, BLUE)}
         ${bar("Verified", p.ver, p.total, GREEN)}
         ${submitBox()}
       </div>
@@ -659,56 +752,39 @@ function renderAwardee() {
         <p class="text-sm text-amber-950 mt-1 whitespace-pre-line">${esc(review.remarks)}</p>
       </div>` : ""}
       <div class="rounded-[10px] bg-brand-900 text-[#c9ced6] p-5 text-xs">
-        <span class="text-blue-300 font-bold">Saved</span> + <span class="text-emerald-300 font-bold">Verified</span> = <span class="text-depedGold-400 font-bold">Cleared</span>
-        <div class="mt-1.5 text-slate-300">Google Drive links only. Set sharing to <strong class="text-white">Anyone with the link</strong>.</div>
+        <div class="font-bold text-white">File name format</div>
+        <code class="block mt-1.5 text-[11px] text-blue-200">MOVno_SURNAME-Initial_Short-Title</code>
+        <div class="mt-1.5 text-slate-300">e.g. <span class="text-white">${esc(rows[0].file)}.pdf</span>. G = General MOV, A = award MOV. Capital letters don't matter; any file type is fine.</div>
       </div>
     </aside>
     <section class="lg:col-span-8 space-y-5 min-w-0">
+      ${folderBox}
       ${part(GENERAL, "General MOVs")}
       ${part(app.award, esc(a.name) + " MOVs")}
     </section>
   </div>`;
 }
 
-async function saveLink(key) {
-  if (!canEditLinks()) return toast("Links are locked while the committee reviews.", "warn");
-  const v = draftLink(key).trim();
-  if (v && !isDriveUrl(v)) return toast("Not a valid Google Drive link. In Drive, click Share → Copy link, then paste it here.", "warn");
-  try {
-    await updateDoc(doc(db, "applications", state.user.uid), {
-      [`items.${key}`]: v ? { submitted: true, link: v } : { submitted: false, link: "" },
-      updatedAt: serverTimestamp()
-    });
-    delete state.linkDrafts[key];
-    toast(v ? "Link saved" : "Link removed");
-    render();
-  } catch (e) {
-    toast(errorText(e), "error");
-  }
-}
-
 function openSubmit() {
   const rd = linkReadiness();
-  if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first (${rd.ready}/${rd.total} done).`, "warn");
+  if (!rd.all) return toast(`All ${rd.total} files must be in your folder first (${rd.ready}/${rd.total} found). Click Check files after adding them.`, "warn");
   const again = !!state.app.submittedAt;
   openModal(`<div class="px-6 pt-5 pb-3 text-brand-950">
       <h3 class="text-base font-bold">${again ? "Resubmit for review" : "Submit for review"}</h3>
-      <p class="text-xs text-slate-300">${esc(awardName(state.app.award).name)}</p>
+      <p class="text-xs text-slate-500">${esc(awardName(state.app.award).name)}</p>
     </div>
     <div class="p-6 space-y-4">
-      <div class="text-xs font-bold px-3 py-2 rounded-lg border bg-blue-50 text-blue-800 border-blue-200">
-        All <span class="tabular">${rd.total}</span> MOVs have a link.${rd.unsaved ? ` <span class="text-amber-700">${rd.unsaved} unsaved link${rd.unsaved > 1 ? "s" : ""} will be saved now.</span>` : ""}
-      </div>
+      <div class="text-xs font-bold px-3 py-2 rounded-lg border bg-blue-50 text-blue-800 border-blue-200">All <span class="tabular">${rd.total}</span> files are in your folder.</div>
       ${field("submit-endorser", 'Endorsed by <span class="text-red-500">*</span>', "text", `value="${esc(state.app.endorser || myName())}" maxlength="120"`)}
       <label class="flex items-start gap-3 bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 cursor-pointer">
         <input id="submit-cert" type="checkbox" class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-600">
         <span class="text-xs text-amber-950">I certify all MOVs are <strong class="underline decoration-amber-400 decoration-2 underline-offset-2">authentic</strong> and <strong class="underline decoration-amber-400 decoration-2 underline-offset-2">original</strong>, per CSC &amp; DepEd guidelines.</span>
       </label>
-      <p class="text-[11px] text-slate-500"><i data-lucide="lock" class="w-3 h-3 inline -mt-0.5"></i> After submitting, links are locked until the committee reviews them.</p>
+      <p class="text-[11px] text-slate-500"><i data-lucide="lock" class="w-3 h-3 inline -mt-0.5"></i> After submitting, keep your folder shared and don't rename or delete the files while the committee reviews them.</p>
     </div>
     <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
       <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-      <button data-act="do-submit" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Save all &amp; submit</button>
+      <button data-act="do-submit" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Submit</button>
     </div>`);
 }
 
@@ -717,18 +793,11 @@ async function doSubmit() {
   if (!endorser) return toast("Enter who endorses this application.", "warn");
   if (!$("#submit-cert").checked) return toast("Tick the certification box to submit.", "warn");
   const rd = linkReadiness();
-  if (!rd.all) return toast(`Add a Google Drive link to all ${rd.total} MOVs first.`, "warn");
-  // Save every link along with the submission, in one write.
-  const updates = { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() };
-  for (const r of checklist(state.app.award)) {
-    const v = draftLink(r.key).trim();
-    if (v !== savedLink(r.key)) updates[`items.${r.key}`] = { submitted: true, link: v };
-  }
+  if (!rd.all) return toast(`All ${rd.total} files must be in your folder first.`, "warn");
   try {
-    await updateDoc(doc(db, "applications", state.user.uid), updates);
-    state.linkDrafts = {};
+    await updateDoc(doc(db, "applications", state.user.uid), { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() });
     closeModal();
-    toast("All links saved and submitted to the PRAISE Committee.");
+    toast("Submitted to the PRAISE Committee.");
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -815,10 +884,10 @@ function renderReview() {
         return `<div class="p-3 sm:px-4 flex flex-wrap sm:flex-nowrap gap-x-3 gap-y-2 items-center ${ver[key] ? "bg-emerald-50/60" : ""}">
           <div class="flex-1 min-w-[200px] text-sm font-medium text-slate-800"><span class="tabular font-mono text-xs text-slate-400 mr-1">${i + 1}</span>${esc(text)}</div>
           ${hasLink(it)
-            ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Saved</span>`
+            ? `<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Found</span>`
             : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">Missing</span>`}
           ${url
-            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs font-semibold text-depedGold-500 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5"></i>Open</a>`
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(it.name || "Open")}" class="inline-flex items-center gap-1 max-w-[240px] text-xs font-semibold text-depedGold-500 hover:underline"><i data-lucide="external-link" class="w-3.5 h-3.5 flex-shrink-0"></i><span class="truncate">${esc(it.name || "Open")}</span></a>`
             : `<span class="text-xs text-slate-400">No link</span>`}
           <label class="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer ${ver[key] ? "text-emerald-700" : "text-slate-600"}">
             <input type="checkbox" data-act="verify" data-key="${key}" ${ver[key] ? "checked" : ""} class="w-5 h-5 rounded border-2 border-slate-300 text-emerald-600 focus:ring-emerald-500">Verified</label>
@@ -834,6 +903,7 @@ function renderReview() {
         <h2 class="text-xl font-bold text-slate-900">${esc(app.name)}</h2>
         <div class="text-sm text-slate-500">${esc(app.dept) || "—"}</div>
         <div class="mt-2 text-sm font-semibold text-brand-900">${esc(a.name)}${a.local ? ` <span class="font-serif italic font-normal text-depedGold-600">· ${esc(a.local)}</span>` : ""}</div>
+        ${app.folder ? `<a href="${esc(app.folder)}" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-depedGold-500 hover:underline"><i data-lucide="folder-open" class="w-4 h-4"></i>Open MOV folder in Google Drive</a>` : ""}
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
@@ -999,13 +1069,13 @@ function buildReport(app, review, profile) {
       return `<tr>
         <td class="num">${i + 1}</td>
         <td>${esc(text)}</td>
-        <td class="link">${url ? `<a href="${esc(url)}">${esc(url)}</a>` : `<span class="muted">${it.link ? "Invalid link (not Google Drive)" : "No link submitted"}</span>`}</td>
+        <td class="link">${url ? `<a href="${esc(url)}">${esc(it.name || url)}</a>` : `<span class="muted">${it.link ? "Invalid link (not Google Drive)" : "No link submitted"}</span>`}</td>
         <td class="mark ${ver[key] ? "yes" : "no"}">${ver[key] ? "✔ Verified" : "—"}</td>
       </tr>`;
     }).join("");
     const done = CATEGORIES[cat].items.filter((_, i) => ver[`${cat}_${i}`]).length;
     return `<table class="movs">
-      <thead><tr><th class="num">#</th><th>Means of Verification</th><th>Google Drive link</th><th class="mark">Committee check</th></tr></thead>
+      <thead><tr><th class="num">#</th><th>Means of Verification</th><th>File in Google Drive</th><th class="mark">Committee check</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr><td></td><td colspan="2">Verified in this section</td><td class="mark">${done} / ${CATEGORIES[cat].items.length}</td></tr></tfoot>
     </table>`;
@@ -2416,7 +2486,7 @@ function renderGuide() {
       <h3 class="text-base font-bold text-brand-900 border-l-4 border-brand-800 pl-3">How it works</h3>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
         ${step(1, "Choose your award", "General MOVs are added automatically.", "bg-blue-50 border-blue-200 text-blue-900")}
-        ${step(2, "Save a Drive link per MOV", "Paste the link, click Save. Submit when all are done.", "bg-amber-50 border-amber-200 text-amber-900")}
+        ${step(2, "Put your MOVs in one Drive folder", "Name each file as listed, share the folder, paste its link, click Check files.", "bg-amber-50 border-amber-200 text-amber-900")}
         ${step(3, "Committee verifies", "Watch for the green Verified badge.", "bg-emerald-50 border-emerald-200 text-emerald-900")}
       </div>
       <p class="text-xs text-slate-500">Set Drive files to <strong class="text-slate-700">Anyone with the link can view</strong> so the committee can open them.</p>
@@ -2476,7 +2546,8 @@ document.addEventListener("click", async (e) => {
     case "confirm-pick": if (canPick(el.dataset.key)) savePick(el.dataset.key); break;
     case "change-award": state.tab = "home"; render(); window.scrollTo({ top: 0 }); break;
     case "go-award": state.tab = "main"; render(); window.scrollTo({ top: 0 }); break;
-    case "save-link": saveLink(el.dataset.key); break;
+    case "check-folder": checkFolder(); break;
+    case "copy-name": navigator.clipboard.writeText(el.dataset.text).then(() => toast("File name copied"), () => toast(el.dataset.text)); break;
     case "open-submit": openSubmit(); break;
     case "do-submit": doSubmit(); break;
     case "open": state.selected = el.dataset.uid; window.scrollTo({ top: 0 }); render(); break;
@@ -2538,7 +2609,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeModal();
   if (e.key === "Enter" && e.target.id === "delete-confirm") { const b = document.querySelector("[data-act=do-delete]"); if (b) doDelete(b.dataset.uid); }
   if (e.key === "Enter" && e.target.matches("tr[data-act=open]")) e.target.click();
-  if (e.key === "Enter" && e.target.dataset && e.target.dataset.act === "link") { e.preventDefault(); saveLink(e.target.dataset.key); }
+  if (e.key === "Enter" && e.target.dataset && e.target.dataset.act === "folder") { e.preventDefault(); checkFolder(); }
 });
 
 document.addEventListener("change", (e) => {
@@ -2577,7 +2648,7 @@ document.addEventListener("change", (e) => {
 document.addEventListener("input", (e) => {
   const el = e.target;
   if (el.dataset.act === "remarks") (state.drafts[state.selected] ||= {}).remarks = el.value;
-  if (el.dataset.act === "link") { state.linkDrafts[el.dataset.key] = el.value; render(); }
+  if (el.dataset.act === "folder") state.folderDraft = el.value;
   if (el.dataset.act === "filter" && el.tagName === "INPUT") { state.filter.q = el.value; render(); }
   if (el.dataset.act === "mon-q") { state.mon.q = el.value; render(); }
   if (el.dataset.act === "dll-remarks") { (state.dllDrafts[el.dataset.pid] ||= {}).remarks = el.value; render(); }

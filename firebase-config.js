@@ -8,3 +8,6 @@ export const firebaseConfig = {
   "messagingSenderId": "351394860809",
   "appId": "1:351394860809:web:ea5dbe6100ee9cfcdbcdd8"
 };
+
+// Google API key for reading MOV folders (Drive API only, and only from reyel-boop.github.io).
+export const driveApiKey = "AIzaSyCKt9VOsFptHXIMZnd_zjTu-hg-yHZLYws";
