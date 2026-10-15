@@ -323,6 +323,20 @@ function field(id, label, type = "text", extra = "") {
     <input id="${id}" name="${id}" type="${type}" ${extra} class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>`;
 }
 
+// Public demo logins shown on the sign-in page. Only roles that see their own records belong here;
+// the demo Admin and HR logins can see real staff data, so they are not listed.
+const DEMO_LOGINS = [
+  { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
+  { role: "Non-teaching staff", text: "Ana Lim: a submitted application under committee review", email: "demo.staff@svnhs-demo.ph", password: "Demo-Staff-2026" }
+];
+async function demoLogin(i) {
+  const d = DEMO_LOGINS[Number(i)];
+  if (!d) return;
+  $("#li-email").value = d.email;
+  $("#li-pass").value = d.password;
+  $("#auth-form").requestSubmit();
+}
+
 let heroPlayed = false;
 function renderAuth() {
   const mode = state.authMode;
@@ -377,6 +391,12 @@ function renderAuth() {
               <div id="auth-error" class="hidden text-xs font-semibold text-[#ff7b7b] bg-red-500/10 border border-red-400/30 rounded-lg px-3 py-2"></div>
               ${body}
             </form>
+            ${mode === "login" ? `<div class="mt-5 pt-4 border-t border-white/10">
+              <div class="flex items-baseline gap-2 mb-2"><span class="ld-kicker text-[#e9eef6]">Try a demo account</span><span class="text-xs text-[#8b94a4]">one click signs you in</span></div>
+              <div class="space-y-2">${DEMO_LOGINS.map((d, i) => `<button type="button" data-act="demo-login" data-i="${i}" class="w-full text-left rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/20 px-3 py-2.5 transition-colors">
+                <div class="text-sm"><span class="font-bold text-white">${d.role}</span> <span class="text-[#b3bccb]">${d.text}</span></div>
+                <div class="mt-0.5 font-mono text-[11px] text-[#8b94a4]">${d.email} · ${d.password}</div></button>`).join("")}</div>
+            </div>` : ""}
           </div>
         </div>
       </div>
@@ -2527,6 +2547,7 @@ document.addEventListener("click", async (e) => {
     case "signout": await signOut(auth); break;
     case "tab": state.tab = el.dataset.tab; render(); break;
     case "auth-mode": state.authMode = el.dataset.mode; render(); break;
+    case "demo-login": demoLogin(el.dataset.i); break;
     case "verify-continue": {
       await state.user.reload();
       await state.user.getIdToken(true);
