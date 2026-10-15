@@ -459,10 +459,22 @@ const AWARD_STYLE = {
   "cat-special-2": { icon: "military_tech" }
 };
 
+// Teaching personnel may only pick Teaching awards, non-teaching only Non-Teaching awards;
+// Special Recognitions are open to both. The type comes from the position (firestore.rules checks it too).
+const awardType = (k) => (k.startsWith("cat-teach-") ? "teaching" : k.startsWith("cat-nonteach-") ? "nonteaching" : "");
+const myPType = () => (state.me && state.me.type) || (state.profile && state.profile.position ? positionType(state.profile.position) : "");
+const canPick = (k) => !awardType(k) || awardType(k) === myPType();
+const PTYPE_NAME = { teaching: "Teaching Personnel", nonteaching: "Non-Teaching Personnel" };
+
 // Awards are a list inside a card per group (after CKSS's action-item lists), not tiles.
 function renderPicker() {
   const app = state.app;
   const locked = !!(app && app.submittedAt);
+  const mine = myPType();
+  const position = (state.me && state.me.position) || (state.profile && state.profile.position) || "";
+  const mismatch = app && !locked && !canPick(app.award);
+  // Groups this person can choose from come first.
+  const isClosed = (g) => (canPick(g.keys[0]) ? 0 : 1);
   main.innerHTML = `${profileBar()}${staffBar()}
     <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
       <div class="min-w-0">
@@ -472,15 +484,22 @@ function renderPicker() {
       ${app ? `<button data-act="go-award" class="${btnDark}">My Award<i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : ""}
     </div>
     ${locked ? `<div class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">Your award is locked because you already submitted.</div>` : ""}
+    ${mismatch ? `<div class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">Your current award is for <strong>${PTYPE_NAME[awardType(app.award)]}</strong>, but your position is ${esc(position)}. Choose an award from <strong>${PTYPE_NAME[mine]}</strong> or Special Recognitions.</div>` : ""}
     <div class="space-y-4">
-      ${AWARD_GROUPS.map((g) => panel(`${panelHead(g.name, `<span class="text-sm text-brand-500">${g.keys.length} awards</span>`)}
-        <ul class="px-3 pb-2 divide-y divide-black/10">
+      ${[...AWARD_GROUPS].sort((x, y) => isClosed(x) - isClosed(y)).map((g) => {
+        const gType = awardType(g.keys[0]);
+        const closed = gType && gType !== mine;
+        const note = !closed ? "" : mine
+          ? `<div class="mx-5 mb-2 flex items-center gap-2 text-sm text-brand-600"><i data-lucide="lock" class="w-4 h-4 flex-shrink-0"></i>Only for ${PTYPE_NAME[gType]}. Your position${position ? ` (${esc(position)})` : ""} is ${PTYPE_NAME[mine]}.</div>`
+          : `<div class="mx-5 mb-2 flex items-center gap-2 text-sm text-brand-600"><i data-lucide="lock" class="w-4 h-4 flex-shrink-0"></i>Choose your position in <button data-act="profile" class="text-depedGold-500 hover:underline">My profile</button> first.</div>`;
+        return panel(`${panelHead(g.name, `<span class="text-sm text-brand-500">${closed ? "Not available" : `${g.keys.length} awards`}</span>`)}${note}
+        <ul class="px-3 pb-2 divide-y divide-black/10 ${closed ? "opacity-50" : ""}">
           ${g.keys.map((k) => {
             const a = awardName(k);
             const current = app && app.award === k;
             const n = CATEGORIES[k].items.length;
-            return `<li><button data-act="pick" data-key="${k}" title="${esc(a.local || a.name)} · ${n} MOVs"
-              class="group w-full flex items-center gap-3.5 px-2 py-3 text-left rounded-lg hover:bg-brand-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-500 ${locked && !current ? "opacity-55" : ""}">
+            return `<li><button data-act="pick" data-key="${k}" title="${closed ? `Only for ${PTYPE_NAME[gType]}` : `${esc(a.local || a.name)} · ${n} MOVs`}" ${closed ? 'aria-disabled="true"' : ""}
+              class="group w-full flex items-center gap-3.5 px-2 py-3 text-left rounded-lg ${closed ? "cursor-not-allowed" : "hover:bg-brand-100"} transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-500 ${locked && !current ? "opacity-55" : ""}">
               <span class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${current ? "bg-depedGold-500 text-white" : "bg-blue-50 text-depedGold-500"}"><span class="material-icons !text-[20px]">${AWARD_STYLE[k].icon}</span></span>
               <span class="flex-1 min-w-0">
                 <span class="flex flex-wrap items-center gap-2"><span class="font-semibold text-brand-950">${esc(a.name)}</span>
@@ -488,10 +507,11 @@ function renderPicker() {
                 ${a.local ? `<span class="block text-sm text-brand-500 truncate">${esc(a.local)}</span>` : ""}
               </span>
               <span class="flex-shrink-0 text-sm text-brand-600 tabular whitespace-nowrap">${n} MOVs</span>
-              <i data-lucide="chevron-right" class="w-4 h-4 text-brand-500 flex-shrink-0 transition-transform group-hover:translate-x-0.5"></i>
+              <i data-lucide="${closed ? "lock" : "chevron-right"}" class="w-4 h-4 text-brand-500 flex-shrink-0 transition-transform ${closed ? "" : "group-hover:translate-x-0.5"}"></i>
             </button></li>`;
           }).join("")}
-        </ul>`)).join("")}
+        </ul>`);
+      }).join("")}
     </div>`;
 }
 
@@ -2392,9 +2412,10 @@ document.addEventListener("click", async (e) => {
     case "pick":
       if (state.app && state.app.award === el.dataset.key) { state.tab = "main"; render(); }
       else if (state.app && state.app.submittedAt) toast("Your award is locked after submitting.", "warn");
+      else if (!canPick(el.dataset.key)) toast(myPType() ? `This award is only for ${PTYPE_NAME[awardType(el.dataset.key)]}.` : "Choose your position in My profile first.", "warn");
       else confirmPick(el.dataset.key);
       break;
-    case "confirm-pick": savePick(el.dataset.key); break;
+    case "confirm-pick": if (canPick(el.dataset.key)) savePick(el.dataset.key); break;
     case "change-award": state.tab = "home"; render(); window.scrollTo({ top: 0 }); break;
     case "go-award": state.tab = "main"; render(); window.scrollTo({ top: 0 }); break;
     case "save-link": saveLink(el.dataset.key); break;

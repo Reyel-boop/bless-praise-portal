@@ -48,6 +48,15 @@ service cloud.firestore {
         && d.dept is string && d.dept.size() <= 120;
     }
 
+    // Teaching personnel may only apply for Teaching awards and non-teaching personnel only for
+    // Non-Teaching awards (by the type on their personnel entry). Special Recognitions are open to both.
+    function awardFits(uid, award) {
+      let p = /databases/$(database)/documents/personnel/$(uid);
+      return award.matches('cat-special-.*')
+        || (exists(p) && ((award.matches('cat-teach-.*') && get(p).data.type == 'teaching')
+                       || (award.matches('cat-nonteach-.*') && get(p).data.type == 'nonteaching')));
+    }
+
     // Admin list: each user may only check their own email. Nobody writes it from the site.
     match /admins/{email} {
       allow get: if signedIn() && request.auth.token.email == email;
@@ -65,10 +74,12 @@ service cloud.firestore {
 
     match /applications/{uid} {
       allow read: if isSelf(uid) || isAdmin();
-      allow create: if isSelf(uid) && validApplication(uid);
+      allow create: if isSelf(uid) && validApplication(uid) && awardFits(uid, request.resource.data.award);
       // Once submitted, the award is locked and links can only change if the
       // committee reopened it (Incomplete / For compliance).
       allow update: if isSelf(uid) && validApplication(uid)
+        // Changing the award must fit the person's type; keeping an older award stays allowed.
+        && (request.resource.data.award == resource.data.award || awardFits(uid, request.resource.data.award))
         && (resource.data.get('submittedAt', null) == null
             || (request.resource.data.award == resource.data.award
                 && (request.resource.data.items == resource.data.items || reopened(uid))));
