@@ -5,8 +5,8 @@ rules_version = '2';
 // Collections
 //   admins/{email}        Admin list. Add documents by hand in the console (ID = lowercase email).
 //   users/{uid}           Awardee profile (name, position, department).
-//   applications/{uid}    The awardee's chosen award, ticked MOVs and Drive links.
-//   reviews/{uid}         Committee decision: verified MOVs, status, remarks. Admins only.
+//   applications/{id}     One per award applied for (ID = uid_award; older ones = uid): MOV files found in the Drive folder.
+//   reviews/{id}          Committee decision per application: verified MOVs, status, remarks. Admins only.
 //
 // Monitoring
 //   monitors/{email}      Staff access: hr, clinic, dll (+ subjects). Admins manage it on the site.
@@ -73,23 +73,27 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /applications/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
-      allow create: if isSelf(uid) && validApplication(uid) && awardFits(uid, request.resource.data.award);
-      // Once submitted, the award is locked and links can only change if the
+    // One application per award: ID = <uid>_<award> (older ones use just the uid). The owner is in d.uid.
+    function ownsApp(d) { return verified() && d.uid == request.auth.uid; }
+    match /applications/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if ownsApp(request.resource.data) && validApplication(request.auth.uid)
+        && id == request.auth.uid + '_' + request.resource.data.award
+        && awardFits(request.auth.uid, request.resource.data.award);
+      // Once submitted, the award is locked and files can only change if the
       // committee reopened it (Incomplete / For compliance).
-      allow update: if isSelf(uid) && validApplication(uid)
-        // Changing the award must fit the person's type; keeping an older award stays allowed.
-        && (request.resource.data.award == resource.data.award || awardFits(uid, request.resource.data.award))
+      allow update: if ownsApp(resource.data) && validApplication(request.auth.uid)
+        // Only older one-award applications (ID = uid) may switch award, and it must fit the person's type.
+        && (request.resource.data.award == resource.data.award || (id == request.auth.uid && awardFits(request.auth.uid, request.resource.data.award)))
         && (resource.data.get('submittedAt', null) == null
             || (request.resource.data.award == resource.data.award
-                && (request.resource.data.items == resource.data.items || reopened(uid))));
-      // Only admins can delete an application (Delete button on the admin side).
-      allow delete: if isAdmin();
+                && (request.resource.data.items == resource.data.items || reopened(id))));
+      // Teachers can remove an award they haven't submitted; admins can delete any application.
+      allow delete: if isAdmin() || (ownsApp(resource.data) && resource.data.get('submittedAt', null) == null);
     }
 
-    match /reviews/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
+    match /reviews/{id} {
+      allow read: if isAdmin() || (verified() && (id == request.auth.uid || id.matches(request.auth.uid + '_cat-[a-z]+-[0-9]+')));
       allow write: if isAdmin();
     }
 

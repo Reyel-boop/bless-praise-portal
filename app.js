@@ -136,7 +136,7 @@ const GREEN = { text: "text-emerald-700", bar: "bg-emerald-500" };
 // ---------- State ----------
 const state = {
   user: null, role: null, profile: null,
-  app: null, review: null, loaded: false,
+  app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
   apps: {}, reviews: {}, selected: null, drafts: {},
   filter: { q: "", award: "", status: "" },
   tab: "main", authMode: "login", unsubs: [],
@@ -163,7 +163,7 @@ async function onUser(u) {
   state.unsubs.forEach((f) => f());
   Object.values(state.watches).forEach((f) => f());
   Object.assign(state, {
-    user: u, role: null, profile: null, app: null, review: null, loaded: false,
+    user: u, role: null, profile: null, app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
     perms: null, mon: freshMon(), rep: freshRep(), request: null, me: null, meLoaded: false,
     personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
@@ -208,7 +208,7 @@ async function onUser(u) {
   if (isAdmin) {
     state.unsubs.push(onSnapshot(collection(db, "applications"), (snap) => {
       state.apps = {};
-      snap.forEach((d) => { state.apps[d.id] = { uid: d.id, ...d.data() }; });
+      snap.forEach((d) => { state.apps[d.id] = { ...d.data(), uid: d.data().uid || d.id, id: d.id }; });
       state.loaded = true;
       render();
     }, (e) => toast(errorText(e), "error")));
@@ -222,18 +222,37 @@ async function onUser(u) {
       const p = await getDoc(doc(db, "users", u.uid));
       state.profile = p.exists() ? p.data() : null;
     } catch (e) { state.profile = null; }
-    let gotApp = false, gotReview = false;
-    state.unsubs.push(onSnapshot(doc(db, "applications", u.uid), (d) => {
-      state.app = d.exists() ? d.data() : null;
-      gotApp = true; state.loaded = gotApp && gotReview; render();
-    }, (e) => toast(errorText(e), "error")));
-    state.unsubs.push(onSnapshot(doc(db, "reviews", u.uid), (d) => {
-      state.review = d.exists() ? d.data() : null;
-      gotReview = true; state.loaded = gotApp && gotReview; render();
+    // A person can apply for several awards: one application per award (ID uid_award; older ones use the uid).
+    const reviewSubs = {};
+    state.unsubs.push(onSnapshot(query(collection(db, "applications"), where("uid", "==", u.uid)), (snap) => {
+      state.myApps = {};
+      snap.forEach((d) => { state.myApps[d.id] = { ...d.data(), id: d.id }; });
+      for (const id of Object.keys(state.myApps)) {
+        if (reviewSubs[id]) continue;
+        reviewSubs[id] = onSnapshot(doc(db, "reviews", id), (r) => {
+          if (r.exists()) state.myReviews[id] = r.data(); else delete state.myReviews[id];
+          render();
+        }, () => {});
+        state.unsubs.push(reviewSubs[id]);
+      }
+      state.loaded = true;
+      render();
     }, (e) => toast(errorText(e), "error")));
   }
   render();
 }
+
+// The application shown on "My Awards": the one picked, else the first one.
+const myAppList = () => Object.values(state.myApps).sort((a, b) => ((a.createdAt && a.createdAt.seconds) || 0) - ((b.createdAt && b.createdAt.seconds) || 0) || a.award.localeCompare(b.award));
+function syncCurrent() {
+  if (state.role === "admin") return;
+  const list = myAppList();
+  if (!state.myApps[state.cur]) state.cur = list.length ? list[0].id : null;
+  state.app = state.cur ? state.myApps[state.cur] : null;
+  state.review = state.cur ? state.myReviews[state.cur] || null : null;
+}
+const appIdFor = (key) => `${state.user.uid}_${key}`;
+const myAppFor = (key) => myAppList().find((a) => a.award === key);
 
 const myName = () => (state.profile && state.profile.name) || (state.user && state.user.displayName) || (state.user && state.user.email) || "";
 
@@ -243,6 +262,7 @@ function render() {
   const ae = document.activeElement;
   const keep = ae && ae.id && "value" in ae ? { id: ae.id, s: ae.selectionStart } : null;
 
+  syncCurrent();
   renderHeader();
   if (!state.user) renderAuth();
   else if (!state.user.emailVerified) renderVerify();
@@ -286,7 +306,7 @@ function renderHeader() {
   if (state.role) {
     groups.push(["", state.role === "admin"
       ? [["main", "Applicants", "users"]]
-      : [["home", "Choose award", "layout-list"], ["main", "My Award", "award"]]]);
+      : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
     if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"]]]);
     groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
   }
@@ -488,23 +508,19 @@ const PTYPE_NAME = { teaching: "Teaching Personnel", nonteaching: "Non-Teaching 
 
 // Awards are a list inside a card per group (after CKSS's action-item lists), not tiles.
 function renderPicker() {
-  const app = state.app;
-  const locked = !!(app && app.submittedAt);
   const mine = myPType();
   const position = (state.me && state.me.position) || (state.profile && state.profile.position) || "";
-  const mismatch = app && !locked && !canPick(app.award);
+  const apps = myAppList();
   // Groups this person can choose from come first.
   const isClosed = (g) => (canPick(g.keys[0]) ? 0 : 1);
   main.innerHTML = `${profileBar()}${staffBar()}
     <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
       <div class="min-w-0">
-        <h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">Choose your award</h2>
-        <p class="mt-1 text-[0.92rem] text-brand-600">${AWARD_GROUPS.reduce((n, g) => n + g.keys.length, 0)} awards. The ${CATEGORIES[GENERAL].items.length} General MOVs are included automatically.</p>
+        <h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">Choose your awards</h2>
+        <p class="mt-1 text-[0.92rem] text-brand-600">Apply for as many awards as you qualify for. Each award is reviewed separately. The ${CATEGORIES[GENERAL].items.length} General MOVs are shared by all your awards.</p>
       </div>
-      ${app ? `<button data-act="go-award" class="${btnDark}">My Award<i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : ""}
+      ${apps.length ? `<button data-act="go-award" class="${btnDark}">My Awards (${apps.length})<i data-lucide="arrow-right" class="w-4 h-4"></i></button>` : ""}
     </div>
-    ${locked ? `<div class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">Your award is locked because you already submitted.</div>` : ""}
-    ${mismatch ? `<div class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">Your current award is for <strong>${PTYPE_NAME[awardType(app.award)]}</strong>, but your position is ${esc(position)}. Choose an award from <strong>${PTYPE_NAME[mine]}</strong> or Special Recognitions.</div>` : ""}
     <div class="space-y-4">
       ${[...AWARD_GROUPS].sort((x, y) => isClosed(x) - isClosed(y)).map((g) => {
         const gType = awardType(g.keys[0]);
@@ -516,18 +532,18 @@ function renderPicker() {
         <ul class="px-3 pb-2 divide-y divide-black/10 ${closed ? "opacity-50" : ""}">
           ${g.keys.map((k) => {
             const a = awardName(k);
-            const current = app && app.award === k;
+            const applied = myAppFor(k);
             const n = CATEGORIES[k].items.length;
-            return `<li><button data-act="pick" data-key="${k}" title="${closed ? `Only for ${PTYPE_NAME[gType]}` : `${esc(a.local || a.name)} · ${n} MOVs`}" ${closed ? 'aria-disabled="true"' : ""}
-              class="group w-full flex items-center gap-3.5 px-2 py-3 text-left rounded-lg ${closed ? "cursor-not-allowed" : "hover:bg-brand-100"} transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-500 ${locked && !current ? "opacity-55" : ""}">
-              <span class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${current ? "bg-depedGold-500 text-white" : "bg-blue-50 text-depedGold-500"}"><span class="material-icons !text-[20px]">${AWARD_STYLE[k].icon}</span></span>
+            const tag = applied ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-depedGold-500 border border-blue-200">Applied · ${STATUS[statusOf(applied, state.myReviews[applied.id])].label}</span>` : "";
+            return `<li><button data-act="pick" data-key="${k}" title="${closed && !applied ? `Only for ${PTYPE_NAME[gType]}` : `${esc(a.local || a.name)} · ${n} MOVs`}" ${closed && !applied ? 'aria-disabled="true"' : ""}
+              class="group w-full flex items-center gap-3.5 px-2 py-3 text-left rounded-lg ${closed && !applied ? "cursor-not-allowed" : "hover:bg-brand-100"} transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-depedGold-500">
+              <span class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${applied ? "bg-depedGold-500 text-white" : "bg-blue-50 text-depedGold-500"}"><span class="material-icons !text-[20px]">${AWARD_STYLE[k].icon}</span></span>
               <span class="flex-1 min-w-0">
-                <span class="flex flex-wrap items-center gap-2"><span class="font-semibold text-brand-950">${esc(a.name)}</span>
-                  ${current ? `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-depedGold-500 border border-blue-200">Current</span>` : ""}</span>
+                <span class="flex flex-wrap items-center gap-2"><span class="font-semibold text-brand-950">${esc(a.name)}</span>${tag}</span>
                 ${a.local ? `<span class="block text-sm text-brand-500 truncate">${esc(a.local)}</span>` : ""}
               </span>
-              <span class="flex-shrink-0 text-sm text-brand-600 tabular whitespace-nowrap">${n} MOVs</span>
-              <i data-lucide="${closed ? "lock" : "chevron-right"}" class="w-4 h-4 text-brand-500 flex-shrink-0 transition-transform ${closed ? "" : "group-hover:translate-x-0.5"}"></i>
+              <span class="flex-shrink-0 text-sm text-brand-600 tabular whitespace-nowrap">${applied ? "Open" : `${n} MOVs`}</span>
+              <i data-lucide="${closed && !applied ? "lock" : applied ? "arrow-right" : "plus"}" class="w-4 h-4 text-brand-500 flex-shrink-0"></i>
             </button></li>`;
           }).join("")}
         </ul>`);
@@ -539,34 +555,61 @@ function confirmPick(key) {
   const a = awardName(key);
   const total = CATEGORIES[GENERAL].items.length + CATEGORIES[key].items.length;
   openModal(`<div class="p-6 space-y-3">
-    <h3 class="text-lg font-bold text-slate-900">Apply for this award?</h3>
+    <h3 class="text-lg font-bold text-slate-900">Add this award?</h3>
     <div class="rounded-xl bg-slate-50 border border-slate-200 p-4">
       <div class="font-bold text-brand-900">${esc(a.name)}</div>
       ${a.local ? `<div class="font-serif italic text-sm text-depedGold-600">${esc(a.local)}</div>` : ""}
       <div class="mt-2 text-xs"><span class="font-bold text-blue-700">${total} MOVs</span> to accomplish</div>
     </div>
-    <p class="text-xs text-slate-500">You can switch awards <strong class="text-slate-700">until you submit</strong>.</p>
+    <p class="text-xs text-slate-500">Your General MOVs are shared, so only the award's own MOVs are new. You can remove an award <strong class="text-slate-700">until you submit it</strong>.</p>
   </div>
   <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
     <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
-    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Apply</button>
+    <button data-act="confirm-pick" data-key="${key}" class="px-5 py-2.5 bg-depedGold-500 hover:bg-depedGold-600 text-white rounded-lg text-sm font-semibold transition-colors">Add award</button>
   </div>`);
 }
 
 async function savePick(key) {
-  const ref = doc(db, "applications", state.user.uid);
+  const id = appIdFor(key);
+  // Start with the General MOVs and folder already found for another award.
+  const other = myAppList().find((a) => a.folder) || myAppList()[0];
+  const general = {};
+  if (other) Object.entries(other.items || {}).forEach(([k, v]) => { if (k.startsWith(GENERAL + "_")) general[k] = v; });
   try {
-    if (state.app) {
-      await updateDoc(ref, { award: key, updatedAt: serverTimestamp() });
-    } else {
-      await setDoc(ref, {
-        uid: state.user.uid, name: myName(), dept: (state.profile && state.profile.dept) || "",
-        award: key, items: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-      });
-    }
+    await setDoc(doc(db, "applications", id), {
+      uid: state.user.uid, name: myName(), dept: (state.profile && state.profile.dept) || "",
+      award: key, items: general, ...(other && other.folder ? { folder: other.folder } : {}),
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+    });
+    state.cur = id;
     state.tab = "main";
     closeModal();
-    toast("Award selected. Your MOVs are ready.");
+    toast("Award added. Its MOVs are listed under My Awards.");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+function confirmRemoveAward() {
+  const app = state.app;
+  if (!app || app.submittedAt) return;
+  openModal(`<div class="p-6 space-y-3">
+    <h3 class="text-lg font-bold text-slate-900">Remove this award?</h3>
+    <p class="text-sm text-slate-600"><strong>${esc(awardName(app.award).name)}</strong> will be removed from your awards. The files in your Drive folder stay.</p>
+  </div>
+  <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+    <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+    <button data-act="remove-award-yes" class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold">Remove award</button>
+  </div>`);
+}
+async function removeAward() {
+  const app = state.app;
+  if (!app || app.submittedAt) return;
+  try {
+    await deleteDoc(doc(db, "applications", app.id));
+    state.cur = null;
+    closeModal();
+    toast("Award removed");
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -595,7 +638,9 @@ function shortTitle(text) {
     .map((w) => w.replace(/[^A-Za-z0-9]/g, "")).filter((w) => w && !TITLE_SKIP.has(w.toLowerCase()));
   return words.slice(0, 3).map((w) => (w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1))).join("-") || "MOV";
 }
-const movCode = (cat, i) => `${cat === GENERAL ? "G" : "A"}${pad(i + 1)}`;
+// Award code: T1–T7 teaching, N1–N4 non-teaching, S1–S2 special. One folder can hold several awards' files.
+const awardCode = (key) => { const m = String(key).match(/^cat-(teach|nonteach|special)-(\d+)$/); return m ? { teach: "T", nonteach: "N", special: "S" }[m[1]] + m[2] : "A"; };
+const movCode = (cat, i) => (cat === GENERAL ? `G${pad(i + 1)}` : `${awardCode(cat)}-${pad(i + 1)}`);
 function movRows(app) {
   const tag = nameTag(app.name);
   return [GENERAL, app.award].flatMap((cat) => CATEGORIES[cat].items.map((text, i) => {
@@ -611,9 +656,9 @@ const folderId = (u) => {
 
 const savedItem = (key) => (state.app.items || {})[key] || {};
 // Teachers edit freely before submitting; afterwards only when the committee sends it back.
-function canEditLinks() {
-  if (!state.app.submittedAt) return true;
-  const st = statusOf(state.app, state.review);
+function canEditLinks(app = state.app, review = state.review) {
+  if (!app.submittedAt) return true;
+  const st = statusOf(app, review);
   return st === "compliance" || st === "incomplete";
 }
 function linkReadiness() {
@@ -641,7 +686,13 @@ async function checkFolder() {
       files.push(...(j.files || []).filter((f) => f.mimeType !== "application/vnd.google-apps.folder"));
       page = j.nextPageToken || "";
     } while (page);
-    const rows = movRows(state.app);
+    // One folder for all awards: match the files for every award that can still be edited.
+    const editableApps = myAppList().filter((a) => canEditLinks(a, state.myReviews[a.id]));
+    const usedAll = new Set(), wrongAll = {};
+    let foundCur = 0, totalCur = 0;
+    const batch = writeBatch(db);
+    for (const app of editableApps) {
+    const rows = movRows(app);
     const used = new Set();
     const items = {}, wrong = {};
     for (const r of rows) {
@@ -656,12 +707,16 @@ async function checkFolder() {
         if (near) { used.add(near.id); wrong[r.key] = near.name; }
       }
     }
-    const extra = files.filter((f) => !used.has(f.id)).map((f) => f.name);
-    await updateDoc(doc(db, "applications", state.user.uid), { folder: link, items, checkedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    used.forEach((f) => usedAll.add(f));
+    wrongAll[app.id] = wrong;
+    batch.update(doc(db, "applications", app.id), { folder: link, items, checkedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    if (app.id === state.app.id) { foundCur = Object.values(items).filter((x) => x.submitted).length; totalCur = rows.length; }
+    }
+    await batch.commit();
+    const extra = files.filter((f) => !usedAll.has(f.id)).map((f) => f.name);
     state.folderDraft = null;
-    state.folderCheck = { wrong, extra, count: files.length };
-    const found = Object.values(items).filter((x) => x.submitted).length;
-    toast(`Checked: ${found} of ${rows.length} files found.`, found === rows.length ? "ok" : "warn");
+    state.folderCheck = { wrong: wrongAll, extra, count: files.length };
+    toast(`Checked${editableApps.length > 1 ? ` ${editableApps.length} awards` : ""}: ${foundCur} of ${totalCur} files found for ${awardName(state.app.award).name}.`, foundCur === totalCur ? "ok" : "warn");
   } catch (e) {
     toast(e.status === 404 || e.status === 403
       ? "Can't open that folder. In Google Drive, click Share → General access → Anyone with the link, then check again."
@@ -683,14 +738,25 @@ function renderAwardee() {
   const ver = (review && review.verified) || {};
   const rd = linkReadiness();
   const rows = movRows(app);
-  const chk = state.folderCheck || { wrong: {}, extra: [] };
+  const chk0 = state.folderCheck || { wrong: {}, extra: [] };
+  const chk = { extra: chk0.extra, wrong: chk0.wrong[app.id] || {} };
+  const apps = myAppList();
+  const switcher = `<div class="flex flex-wrap items-center gap-2 mb-5">
+      ${apps.map((x) => {
+        const on = x.id === app.id, s = statusOf(x, state.myReviews[x.id]);
+        return `<button data-act="cur-app" data-id="${esc(x.id)}" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold border transition-colors ${on ? "bg-brand-50 text-brand-950 border-black/20 shadow-sm" : "text-brand-600 border-transparent hover:bg-brand-100 hover:text-brand-950"}">
+          <span class="material-icons !text-[18px] text-depedGold-500">${AWARD_STYLE[x.award].icon}</span>${esc(awardName(x.award).name)}
+          <span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${STATUS[s].cls}">${STATUS[s].label}</span></button>`;
+      }).join("")}
+      <button data-act="change-award" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-depedGold-500 hover:bg-blue-50"><i data-lucide="plus" class="w-4 h-4"></i>Add another award</button>
+    </div>`;
   const folder = state.folderDraft ?? app.folder ?? "";
   const copyBtn = (text) => `<button data-act="copy-name" data-text="${esc(text)}" title="Copy file name" class="flex-shrink-0 p-1 rounded text-slate-400 hover:text-depedGold-500 hover:bg-blue-50"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>`;
 
   const folderBox = `<div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5">
       <div class="flex items-center gap-2"><i data-lucide="folder-open" class="w-5 h-5 text-depedGold-500"></i><h3 class="text-base font-bold text-slate-900">Your Google Drive folder</h3></div>
       <ol class="mt-3 space-y-1 text-sm text-slate-600 list-decimal pl-5">
-        <li>Make <strong class="text-slate-800">one folder</strong> in Google Drive for your MOVs.</li>
+        <li>Make <strong class="text-slate-800">one folder</strong> in Google Drive for the MOVs of <strong class="text-slate-800">all</strong> your awards.</li>
         <li>Put one file per MOV in it, named <strong class="text-slate-800">exactly</strong> as listed below. Any file type is fine (PDF, JPG, Word…).</li>
         <li>Share the folder: <strong class="text-slate-800">General access → Anyone with the link</strong> (Viewer).</li>
         <li>Paste the folder link here and click <strong class="text-slate-800">Check files</strong>. Check again after adding or renaming files.</li>
@@ -750,11 +816,11 @@ function renderAwardee() {
       <p class="text-[11px] text-center ${rd.all ? "text-emerald-700 font-semibold" : "text-slate-500"}">${rd.all
         ? `All ${rd.total} files are in your folder.`
         : `All <strong class="text-slate-700">${rd.total} files</strong> must be in your folder to submit. <span class="tabular">${rd.ready}/${rd.total}</span> found.`}</p>
-      ${app.submittedAt ? "" : `<button data-act="change-award" class="text-xs font-semibold text-slate-500 hover:text-slate-800">Change award</button>`}
+      ${app.submittedAt ? "" : `<button data-act="remove-award" class="text-xs font-semibold text-slate-500 hover:text-red-700">Remove this award</button>`}
     </div>`;
   };
 
-  main.innerHTML = `<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+  main.innerHTML = `${switcher}<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
     <aside class="lg:col-span-4 space-y-4">
       <div class="bg-white rounded-[10px] border border-slate-200 shadow-sm p-5 space-y-4">
         <div>
@@ -774,7 +840,7 @@ function renderAwardee() {
       <div class="rounded-[10px] bg-brand-900 text-[#c9ced6] p-5 text-xs">
         <div class="font-bold text-white">File name format</div>
         <code class="block mt-1.5 text-[11px] text-blue-200">MOVno_SURNAME-Initial_Short-Title</code>
-        <div class="mt-1.5 text-slate-300">e.g. <span class="text-white">${esc(rows[0].file)}.pdf</span>. G = General MOV, A = award MOV. Capital letters don't matter; any file type is fine.</div>
+        <div class="mt-1.5 text-slate-300">e.g. <span class="text-white">${esc(rows[0].file)}.pdf</span>. G = General MOV (shared by all your awards); ${awardCode(app.award)} = this award. Capital letters don't matter; any file type is fine.</div>
       </div>
     </aside>
     <section class="lg:col-span-8 space-y-5 min-w-0">
@@ -815,7 +881,7 @@ async function doSubmit() {
   const rd = linkReadiness();
   if (!rd.all) return toast(`All ${rd.total} files must be in your folder first.`, "warn");
   try {
-    await updateDoc(doc(db, "applications", state.user.uid), { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() });
+    await updateDoc(doc(db, "applications", state.app.id), { submittedAt: serverTimestamp(), endorser, updatedAt: serverTimestamp() });
     closeModal();
     toast("Submitted to the PRAISE Committee.");
   } catch (e) {
@@ -826,7 +892,7 @@ async function doSubmit() {
 // ----- Admin: applicants list -----
 function renderAdmin() {
   const all = Object.values(state.apps).map((app) => {
-    const review = state.reviews[app.uid];
+    const review = state.reviews[app.id];
     return { app, review, st: statusOf(app, review), p: progress(app, review) };
   });
   const f = state.filter;
@@ -867,13 +933,13 @@ function renderAdmin() {
           <th class="text-right font-bold px-4 py-2.5">Actions</th>
         </tr></thead>
         <tbody class="divide-y divide-black/10">
-          ${rows.map(({ app, st, p }) => `<tr data-act="open" data-uid="${esc(app.uid)}" tabindex="0" class="hover:bg-blue-50/50 cursor-pointer focus:outline-none focus:bg-blue-50">
+          ${rows.map(({ app, st, p }) => `<tr data-act="open" data-uid="${esc(app.id)}" tabindex="0" class="hover:bg-blue-50/50 cursor-pointer focus:outline-none focus:bg-blue-50">
             <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(app.name)}</div><div class="text-xs text-slate-500">${esc(app.dept) || "—"}</div></td>
             <td class="px-4 py-3 text-xs text-slate-700 max-w-[240px]">${esc(awardName(app.award).name)}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-blue-700">${p.sub}/${p.total}</td>
             <td class="px-4 py-3 tabular text-xs font-bold text-emerald-700">${p.ver}/${p.total}</td>
             <td class="px-4 py-3 whitespace-nowrap">${pill(st)}</td>
-            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.uid)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.uid)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
+            <td class="px-4 py-3 text-right whitespace-nowrap"><button data-act="report" data-uid="${esc(app.id)}" title="Generate report" class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white transition-colors"><i data-lucide="file-text" class="w-3.5 h-3.5"></i>Report</button><button data-act="delete" data-uid="${esc(app.id)}" title="Delete application" class="ml-1.5 inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete</button></td>
           </tr>`).join("")}
         </tbody></table></div>`
       : `<div class="p-10 text-center text-sm text-slate-400">${all.length ? "No applicants match these filters." : "No applicants yet. Teachers appear here once they choose an award."}</div>`}
@@ -884,8 +950,8 @@ function renderAdmin() {
 function renderReview() {
   const app = state.apps[state.selected];
   if (!app) { state.selected = null; return renderAdmin(); }
-  const review = state.reviews[app.uid] || {};
-  const draft = state.drafts[app.uid] || (state.drafts[app.uid] = {});
+  const review = state.reviews[app.id] || {};
+  const draft = state.drafts[app.id] || (state.drafts[app.id] = {});
   const status = draft.status !== undefined ? draft.status : review.status || "";
   const remarks = draft.remarks !== undefined ? draft.remarks : review.remarks || "";
   const items = app.items || {};
@@ -927,8 +993,8 @@ function renderReview() {
         <div class="mt-1 text-xs text-slate-500">${app.submittedAt ? `Submitted <strong class="text-slate-700">${fmtDate(app.submittedAt)}</strong>${app.endorser ? ` · endorsed by <strong class="text-slate-700">${esc(app.endorser)}</strong>` : ""}` : `<span class="text-amber-700 font-semibold">Not submitted yet</span>`} · updated ${fmtDate(app.updatedAt)}</div>
       </div>
       <div class="flex flex-col items-end gap-2">
-        <button data-act="report" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
-        <button data-act="delete" data-uid="${esc(app.uid)}" class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete application</button>
+        <button data-act="report" data-uid="${esc(app.id)}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-depedGold-500 hover:bg-depedGold-600 text-white text-sm font-bold shadow-sm transition-colors"><i data-lucide="file-text" class="w-4 h-4"></i>Generate report</button>
+        <button data-act="delete" data-uid="${esc(app.id)}" class="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i>Delete application</button>
         ${pill(st)}
         <div class="tabular text-xs"><span class="font-bold text-blue-700">${p.sub}/${p.total} links</span> · <span class="font-bold text-emerald-700">${p.ver}/${p.total} verified</span></div>
       </div>
@@ -1076,7 +1142,7 @@ function buildReport(app, review, profile) {
   const ver = (review && review.verified) || {};
   const pct = (n) => (p.total ? Math.round((n / p.total) * 100) : 0);
   const now = new Date();
-  const ref = `BP-${now.getFullYear()}-${String(app.uid).slice(0, 6).toUpperCase()}`;
+  const ref = `BP-${now.getFullYear()}-${String(app.uid).slice(0, 6).toUpperCase()}-${awardCode(app.award)}`;
   const dt = (ts) => (ts && ts.toDate ? ts.toDate().toLocaleString("en-PH", { dateStyle: "long", timeStyle: "short" }) : "—");
   const logo = new URL("logo.png", location.href).href;
   const awardTitle = esc(a.name) + (a.local ? ` <span class="local">(${esc(a.local)})</span>` : "");
@@ -1249,7 +1315,7 @@ async function generateReport(uid) {
   w.document.write('<p style="font:14px system-ui,sans-serif;padding:24px;color:#475569">Preparing report…</p>');
   let profile = null;
   try {
-    const snap = await getDoc(doc(db, "users", uid));
+    const snap = await getDoc(doc(db, "users", app.uid));
     profile = snap.exists() ? snap.data() : null;
   } catch (e) { profile = null; }
   w.document.open();
@@ -2559,12 +2625,14 @@ document.addEventListener("click", async (e) => {
       try { await sendEmailVerification(state.user); toast("Link sent again."); } catch (err) { toast(errorText(err), "error"); }
       break;
     case "pick":
-      if (state.app && state.app.award === el.dataset.key) { state.tab = "main"; render(); }
-      else if (state.app && state.app.submittedAt) toast("Your award is locked after submitting.", "warn");
+      if (myAppFor(el.dataset.key)) { state.cur = myAppFor(el.dataset.key).id; state.tab = "main"; render(); window.scrollTo({ top: 0 }); }
       else if (!canPick(el.dataset.key)) toast(myPType() ? `This award is only for ${PTYPE_NAME[awardType(el.dataset.key)]}.` : "Choose your position in My profile first.", "warn");
       else confirmPick(el.dataset.key);
       break;
-    case "confirm-pick": if (canPick(el.dataset.key)) savePick(el.dataset.key); break;
+    case "confirm-pick": if (canPick(el.dataset.key) && !myAppFor(el.dataset.key)) savePick(el.dataset.key); break;
+    case "cur-app": state.cur = el.dataset.id; state.folderCheck = null; render(); break;
+    case "remove-award": confirmRemoveAward(); break;
+    case "remove-award-yes": removeAward(); break;
     case "change-award": state.tab = "home"; render(); window.scrollTo({ top: 0 }); break;
     case "go-award": state.tab = "main"; render(); window.scrollTo({ top: 0 }); break;
     case "check-folder": checkFolder(); break;
