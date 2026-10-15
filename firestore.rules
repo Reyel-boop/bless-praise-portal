@@ -13,7 +13,7 @@ rules_version = '2';
 //   accessRequests/{email} Someone asking for Monitoring access. Admins approve or decline it.
 //   personnel/{id}        Teaching and non-teaching personnel. One per account (ID = uid), made at sign-up; HR can edit.
 //   attendance/{id}       Absences and tardiness. HR only.
-//   aor/{week}            Cleanest classroom per week (week = Monday, YYYY-MM-DD). School Clinic only.
+//   aor/{week}            Cleanest classroom per week (week = Monday, YYYY-MM-DD; demo-<week> for demo accounts). School Clinic only.
 //   dll/{week}_{pid}      Daily Lesson Log check per teacher per week. Head/Master Teachers, own subjects.
 
 service cloud.firestore {
@@ -175,11 +175,14 @@ service cloud.firestore {
         && str(request.resource.data.remarks, 500);
     }
 
-    match /aor/{week} {
-      allow read, delete: if can('clinic');
-      allow create, update: if can('clinic')
-        && request.resource.data.keys().hasOnly(['week', 'first', 'second', 'third', 'remarks', 'by', 'updatedAt'])
-        && request.resource.data.week == week && isDay(week)
+    // One rating per week: ID = the week (Monday). Demo accounts use demo-<week> with demo: true.
+    match /aor/{id} {
+      allow read, delete: if can('clinic') && demoOk(resource.data);
+      allow create, update: if can('clinic') && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
+        && request.resource.data.keys().hasOnly(['week', 'first', 'second', 'third', 'remarks', 'by', 'demo', 'updatedAt'])
+        && isDay(request.resource.data.week)
+        && (id == request.resource.data.week
+            || (request.resource.data.get('demo', false) == true && id == 'demo-' + request.resource.data.week))
         && request.resource.data.first is string && request.resource.data.first.size() > 0 && request.resource.data.first.size() <= 80
         && str(request.resource.data.second, 80) && str(request.resource.data.third, 80)
         && str(request.resource.data.remarks, 300);

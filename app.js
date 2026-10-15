@@ -346,6 +346,7 @@ function field(id, label, type = "text", extra = "") {
 // Public demo logins shown on the sign-in page. Demo accounts only see demo records (firestore.rules);
 // the demo Admin login can see every application, so it is not listed.
 const DEMO_LOGINS = [
+  { role: "School Clinic", text: "Carmen Lopez: weekly AOR cleanest classroom ratings and the AOR report", email: "demo.clinic@svnhs-demo.ph", password: "Demo-Clinic-2026" },
   { role: "HR", text: "Maria Santos: attendance sheet, month view, personnel and the monthly attendance report", email: "demo.hr@svnhs-demo.ph", password: "Demo-HR-2026" },
   { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
   { role: "Non-teaching staff", text: "Ana Lim: a submitted application under committee review", email: "demo.staff@svnhs-demo.ph", password: "Demo-Staff-2026" }
@@ -1549,6 +1550,7 @@ async function cancelRequest() {
 const isDemoUser = () => /@svnhs-demo\.ph$/i.test((state.user && state.user.email) || "");
 const demoOnly = (...w) => (isDemoUser() ? [where("demo", "==", true), ...w] : w);
 const demoMark = () => (isDemoUser() ? { demo: true } : {});
+const aorDocId = (week) => (isDemoUser() ? `demo-${week}` : week);
 
 function watch(key, ref, set) {
   if (state.watches[key]) state.watches[key]();
@@ -1563,7 +1565,9 @@ function startMonitoring() {
   const p = state.perms;
   if (!p) return;
   if (p.hr || p.dll) watch("personnel", query(collection(db, "personnel"), ...demoOnly()), (d) => { state.personnel = d; });
-  if (p.clinic) watch("aor", collection(db, "aor"), (d) => { state.aor = d; });
+  if (p.clinic) watch("aor", query(collection(db, "aor"), ...demoOnly()), (d) => {
+    state.aor = Object.fromEntries(Object.values(d).filter((x) => isDay(x.week) && !!x.demo === isDemoUser()).map((x) => [x.week, x]));
+  });
   if (p.admin) watch("monitors", collection(db, "monitors"), (d) => { state.monitors = d; });
   if (p.admin) watch("requests", collection(db, "accessRequests"), (d) => { state.requests = d; });
   if (p.hr) watchAttendance();
@@ -2077,7 +2081,7 @@ async function saveAor() {
   const named = [first, second, third].filter(Boolean).map((x) => x.toLowerCase());
   if (new Set(named).size !== named.length) return toast("A classroom can only take one place per week.", "warn");
   try {
-    await setDoc(doc(db, "aor", week), { week, first, second, third, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp() });
+    await setDoc(doc(db, "aor", aorDocId(week)), { week, first, second, third, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp(), ...demoMark() });
     closeModal();
     toast(`Saved: week of ${fmtWeek(week)}`);
   } catch (e) {
@@ -2341,7 +2345,7 @@ function confirmMonDelete(col, id) {
 async function doMonDelete(col, id) {
   if (!DEL_TEXT[col]) return;
   try {
-    await deleteDoc(doc(db, col, id));
+    await deleteDoc(doc(db, col, col === "aor" ? aorDocId(id) : id));
     closeModal();
     toast("Deleted");
   } catch (e) {
