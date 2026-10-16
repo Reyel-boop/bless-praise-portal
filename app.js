@@ -388,7 +388,7 @@ function renderAuth() {
     body = `${field("su-name", "Full name", "text", 'required maxlength="120" placeholder="Juan Dela Cruz" autocomplete="name"')}
       ${positionFields("su", "", "")}
       <div>${lbl("su-role", "Sign up as")}${selectBox("su-role", "su-role", SIGNUP_ROLES.map(([k, t]) => [k, t]), "", "w-full")}
-        <p id="su-role-note" class="hidden text-[11px] text-slate-500 mt-1">An admin approves this before the Monitoring tab opens. You can still apply for an award.</p></div>
+        <p id="su-role-note" class="hidden text-[11px] text-slate-500 mt-1">An admin approves this before the Monitoring tab opens. You can still apply for awards: they follow the position you chose above, so a teacher in charge of the clinic picks their teaching position.</p></div>
       <div id="su-subjects" class="hidden"><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas you monitor</div>
         <div class="grid grid-cols-2 gap-1.5">${subjectChecks("su-subject", [])}</div></div>
       ${field("su-email", "Email", "email", 'required autocomplete="email" placeholder="name@deped.gov.ph"')}
