@@ -11,7 +11,7 @@ import { firebaseConfig, driveApiKey, aiApiUrl } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
 import { GUIDE_TITLE, GUIDE_SECTIONS } from "./guide.js";
-import { showcaseHTML, SAMPLE_AWARDEES, AWARD_NAMES, resizePhoto } from "./showcase.js";
+import { showcaseHTML, AWARD_NAMES, resizePhoto } from "./showcase.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS, VERSES } from "./data.js";
 
 // ---------- Helpers ----------
@@ -369,22 +369,6 @@ function field(id, label, type = "text", extra = "") {
     <input id="${id}" name="${id}" type="${type}" ${extra} class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></div>`;
 }
 
-// Public demo logins shown on the sign-in page. Demo accounts only see and change demo records (firestore.rules).
-const DEMO_LOGINS = [
-  { role: "Admin", text: "PRAISE Committee: applicants and reviews, staff access, and reports from all monitoring (attendance, AOR, ILAW)", email: "demo.admin@svnhs-demo.ph", password: "Demo-Admin-2026" },
-  { role: "Head / Master Teacher", text: "Rose Aquino: attendance of all personnel and the monthly attendance report, plus the weekly ILAW lesson plan check per subject area and teacher", email: "demo.headteacher@svnhs-demo.ph", password: "Demo-HeadTeacher-2026" },
-  { role: "School Clinic", text: "Carmen Lopez: weekly AOR cleanest classroom ratings and the AOR report", email: "demo.clinic@svnhs-demo.ph", password: "Demo-Clinic-2026" },
-  { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
-  { role: "Non-teaching staff", text: "Ana Lim: a submitted application under committee review", email: "demo.staff@svnhs-demo.ph", password: "Demo-Staff-2026" }
-];
-async function demoLogin(i) {
-  const d = DEMO_LOGINS[Number(i)];
-  if (!d) return;
-  $("#li-email").value = d.email;
-  $("#li-pass").value = d.password;
-  $("#auth-form").requestSubmit();
-}
-
 let heroPlayed = false;
 // Bible verse on the sign-in page: a random one each visit, then a new one every 15 seconds.
 let verseAt = Math.floor(Math.random() * VERSES.length), verseTimer = null;
@@ -450,12 +434,6 @@ function renderAuth() {
               <div id="auth-error" class="hidden text-xs font-semibold text-[#ff7b7b] bg-red-500/10 border border-red-400/30 rounded-lg px-3 py-2"></div>
               ${body}
             </form>
-            ${mode === "login" ? `<div class="mt-5 pt-4 border-t border-white/10">
-              <div class="flex items-baseline gap-2 mb-2"><span class="ld-kicker text-[#e9eef6]">Try a demo account</span><span class="text-xs text-[#8b94a4]">one click signs you in</span></div>
-              <div class="space-y-2">${DEMO_LOGINS.map((d, i) => `<button type="button" data-act="demo-login" data-i="${i}" class="w-full text-left rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/20 px-3 py-2.5 transition-colors">
-                <div class="text-sm"><span class="font-bold text-white">${d.role}</span> <span class="text-[#b3bccb]">${d.text}</span></div>
-                <div class="mt-0.5 font-mono text-[11px] text-[#8b94a4]">${d.email} · ${d.password}</div></button>`).join("")}</div>
-            </div>` : ""}
           </div>
         </div>
       </div>
@@ -3398,7 +3376,7 @@ function showcaseSub(list) {
 }
 function publicShowcase() {
   if (state.awardees === null) return "";
-  return state.awardees.length ? showcaseHTML(state.awardees, { sub: showcaseSub(state.awardees) }) : showcaseHTML(SAMPLE_AWARDEES, { sample: true });
+  return state.awardees.length ? showcaseHTML(state.awardees, { sub: showcaseSub(state.awardees) }) : "";
 }
 
 function watchAwardees() {
@@ -3420,8 +3398,8 @@ function renderShowcaseAdmin() {
   if (!list) { main.innerHTML = head + panel(empty("Loading…")); return; }
   const note = isDemoUser()
     ? `<p class="mb-4 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Demo account: awardees you add here are seen only by demo accounts (in the preview below), not on the public sign-in page.</p>`
-    : `<p class="mb-4 text-xs text-slate-500">Post a photo only with the awardee's consent (Data Privacy Act of 2012). Tip: a cut-out photo (PNG with a transparent background) looks best, like the samples.</p>`;
-  main.innerHTML = head + note + panel(panelHead("Awardees", `<span class="text-sm text-brand-500">${list.length ? list.length + " on the sign-in page" : "None yet: the sign-in page shows the samples"}</span>`) + (list.length
+    : `<p class="mb-4 text-xs text-slate-500">Post a photo only with the awardee's consent (Data Privacy Act of 2012). Tip: a cut-out photo (PNG with a transparent background) looks best.</p>`;
+  main.innerHTML = head + note + panel(panelHead("Awardees", `<span class="text-sm text-brand-500">${list.length ? list.length + " on the sign-in page" : "None yet: the section is hidden on the sign-in page"}</span>`) + (list.length
       ? table(["", "Awardee", "Line", "Order", ""], list.map((a, i) => `<tr>
           <td class="px-4 py-2.5 w-16"><img src="${esc(a.photo)}" alt="" class="w-11 h-11 rounded-full object-cover bg-[#fc5d3b]"></td>
           <td class="px-4 py-2.5"><div class="font-semibold text-slate-900">${esc(a.name)}</div><div class="text-xs text-slate-500">${esc(a.award)}${a.year ? " · " + esc(a.year) : ""}${a.photo2 ? " · hover photo" : ""}</div></td>
@@ -3430,7 +3408,7 @@ function renderShowcaseAdmin() {
           <td class="px-4 py-2.5 text-right whitespace-nowrap">${iconBtn("aw-edit", a.id, "pencil", "Edit")}${iconBtn("aw-del", a.id, "trash-2", "Delete")}</td></tr>`))
       : empty("No awardees yet. Click Add awardee.")))
     + `<div class="mt-6"><div class="text-sm font-bold text-brand-950 mb-2">Preview <span class="font-normal text-brand-500">· hover a photo</span></div>
-      <div class="aw-preview">${list.length ? showcaseHTML(list, { sub: showcaseSub(list) }) : showcaseHTML(SAMPLE_AWARDEES, { sample: true })}</div></div>`;
+      ${list.length ? `<div class="aw-preview">${showcaseHTML(list, { sub: showcaseSub(list) })}</div>` : panel(empty("The section appears on the sign-in page once you add an awardee."))}</div>`;
 }
 
 const awDisc = (src, cut) => src
@@ -3559,7 +3537,6 @@ document.addEventListener("click", async (e) => {
       break;
     }
     case "auth-mode": state.authMode = el.dataset.mode; render(); break;
-    case "demo-login": demoLogin(el.dataset.i); break;
     case "verify-continue": {
       await state.user.reload();
       await state.user.getIdToken(true);
