@@ -11,3 +11,6 @@ export const firebaseConfig = {
 
 // Google API key for reading MOV folders (Drive API only, and only from reyel-boop.github.io).
 export const driveApiKey = "AIzaSyCKt9VOsFptHXIMZnd_zjTu-hg-yHZLYws";
+
+// ILAW Assist service (AI writing, credits, PayMongo top-ups). Empty until it is deployed; demo accounts work without it.
+export const aiApiUrl = "";

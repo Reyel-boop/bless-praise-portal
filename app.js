@@ -7,7 +7,7 @@ import {
   getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where,
   serverTimestamp, writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, driveApiKey } from "./firebase-config.js";
+import { firebaseConfig, driveApiKey, aiApiUrl } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS, VERSES } from "./data.js";
@@ -143,7 +143,7 @@ const state = {
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
-  perms: null, mon: null, rep: null, score: null, request: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", me: null, meLoaded: false,
+  ai: null, perms: null, mon: null, rep: null, score: null, request: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", me: null, meLoaded: false,
   personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
@@ -166,7 +166,7 @@ async function onUser(u) {
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
-    myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
+    ai: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
     personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
@@ -180,6 +180,13 @@ async function onUser(u) {
   state.perms = perms;
   // HR, Clinic and Head / Master Teachers land on Monitoring.
   state.tab = isAdmin ? "main" : perms ? "monitor" : "home";
+  // Back from a PayMongo top-up: open ILAW Assist and confirm the payment.
+  const back = new URLSearchParams(location.search);
+  if (back.get("aipaid") || back.get("aitopup")) {
+    history.replaceState(null, "", location.pathname);
+    state.tab = "ai";
+    if (back.get("aipaid")) setTimeout(aiConfirmTopup, 500); else setTimeout(() => toast("Top-up cancelled."), 500);
+  }
   startMonitoring();
   if (!isAdmin) {
     // Live: access granted or removed by an admin applies without signing in again.
@@ -276,6 +283,7 @@ function render() {
   else if (state.tab === "reports" && state.perms) renderReports();
   else if (state.tab === "scores" && state.perms && state.perms.admin) renderScores();
   else if (state.tab === "plans" && state.role !== "admin") renderPlans();
+  else if (state.tab === "ai") renderAi();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
   icons();
@@ -317,7 +325,8 @@ function renderHeader() {
     groups.push(["", state.role === "admin"
       ? [["main", "Applicants", "users"]]
       : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
-    if (state.role !== "admin" && myPType() === "teaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"]]]);
+    if (state.role !== "admin" && myPType() === "teaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"], ["ai", `ILAW Assist${state.ai && state.ai.me ? ` (${state.ai.me.credits})` : ""}`, "sparkles"]]]);
+    if (state.role === "admin") groups.push(["ILAW Assist", [["ai", "ILAW Assist", "sparkles"]]]);
     if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"],
       ...(state.perms.admin ? [["scores", "Scoreboard & awards", "medal"]] : [])]]);
     groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
@@ -2431,8 +2440,10 @@ function openPlanGen(existing) {
     <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex flex-wrap justify-end gap-2">
       <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
       ${existing ? "" : `<button data-act="plan-blank" class="${btnLight}">Start blank</button>`}
-      <button data-act="plan-gen" data-id="${existing ? "1" : ""}" class="${btnDark}"><i data-lucide="wand-sparkles" class="w-4 h-4"></i>Generate draft</button>
-    </div>`);
+      <button data-act="plan-gen" data-id="${existing ? "1" : ""}" class="${btnLight}" title="Built-in template text (no AI, free)"><i data-lucide="wand-sparkles" class="w-4 h-4"></i>Free template draft</button>
+      <button data-act="plan-ai" data-id="${existing ? "1" : ""}" ${aiReady() ? "" : "disabled"} class="${btnDark} ${aiReady() ? "" : "opacity-50 cursor-not-allowed"}"><i data-lucide="sparkles" class="w-4 h-4"></i>Write with AI · 1 credit</button>
+    </div>
+    <div class="px-6 pb-3 text-[11px] text-slate-500 text-right">${aiReady() ? `ILAW Assist${aiDemo() ? " (demo)" : ""} · ${state.ai && state.ai.me ? `${state.ai.me.credits} credit${state.ai.me.credits === 1 ? "" : "s"} left` : "credits load in the ILAW Assist tab"} · up to 6 sessions` : "AI writing opens soon."}</div>`);
 }
 
 function genInput() {
@@ -2615,6 +2626,143 @@ async function ilawDecision(id, ret) {
     toast(ret ? "Returned to the teacher" : "Marked as checked");
   } catch (e) {
     toast(errorText(e), "error");
+  }
+}
+
+// ----- ILAW Assist: AI-written ILAW plans, paid with credits (PayMongo top-ups) -----
+// The ILAW Assist service (Cloudflare) writes plans with AI and keeps credit balances; the portal sends the
+// user's Firebase ID token. Demo accounts get a demo in the browser: sample text, pretend top-ups.
+const AI_PACKS_DEMO = [{ id: "starter", credits: 5, price: 25 }, { id: "teacher", credits: 15, price: 60 }, { id: "pro", credits: 35, price: 120 }];
+const aiDemo = () => isDemoUser();
+const aiReady = () => aiDemo() || !!aiApiUrl;
+function aiDemoDb() {
+  const key = `ilaw-ai-demo-${state.user.uid}`;
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(key)); } catch { d = null; }
+  if (!d) d = { credits: 3, ledger: [{ delta: 3, kind: "signup", amount: 0, note: "Free credits", created_at: Date.now() }] };
+  return { d, save: () => { try { localStorage.setItem(key, JSON.stringify(d)); } catch { /* private mode */ } } };
+}
+async function aiCall(path, body) {
+  if (aiDemo()) {
+    const { d, save } = aiDemoDb();
+    const err = (m) => { throw new Error(m); };
+    if (path === "/config") return { app: "ILAW Assist", business: "ILAW Assist (demo)", support: "", packs: AI_PACKS_DEMO, freeCredits: 3, topups: true };
+    if (path === "/me") return { user: { name: myName(), email: state.user.email, credits: d.credits, owner: state.role === "admin" } };
+    if (path === "/ledger") return { ledger: d.ledger.slice().reverse(), credits: d.credits };
+    if (path === "/generate") {
+      if (d.credits < 1) err("You have no AI credits left. Top up to keep generating.");
+      await new Promise((r) => setTimeout(r, 1200));
+      d.credits--; d.ledger.push({ delta: -1, kind: "ai", amount: 0, note: `AI plan: ${body.title}`, created_at: Date.now() }); save();
+      const g = generatePlan({ ...body, teacher: myName() });
+      return { cells: g.cells, sessions: g.sessions, references: g.references, credits: d.credits, aiUse: "DEMO: this sample text was not written by AI. With ILAW Assist live, the AI writes the plan from your lesson details." };
+    }
+    if (path === "/checkout") {
+      const p = AI_PACKS_DEMO.find((x) => x.id === body.pack);
+      d.credits += p.credits; d.ledger.push({ delta: p.credits, kind: "purchase", amount: p.price * 100, note: `${p.id} pack (demo, no real payment)`, created_at: Date.now() }); save();
+      return { demo: true, added: p.credits, credits: d.credits };
+    }
+    if (path === "/checkout/refresh") return { added: 0, credits: d.credits };
+    if (path === "/owner/summary") return { users: 41, model: "demo figures", sales: { n: 18, amount: 132500, credits: 395 }, sales30: { n: 11, amount: 78000 }, gens: { n: 263, cost: 1.12 }, gens30: { n: 150, cost: 0.64 },
+      recent: [{ email: "teacher1@deped.gov.ph", credits: 15, amount: 6000, paid_at: Date.now() - 3600000 }, { email: "teacher2@deped.gov.ph", credits: 35, amount: 12000, paid_at: Date.now() - 86400000 }] };
+    if (path === "/owner/users") return { users: [] };
+    err("Not available in the demo.");
+  }
+  if (!aiApiUrl) throw new Error("ILAW Assist opens soon.");
+  const token = await auth.currentUser.getIdToken();
+  const r = await fetch(`${aiApiUrl}/api${path}`, { method: body ? "POST" : "GET", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `ILAW Assist error ${r.status}`);
+  return j;
+}
+async function aiLoad(force) {
+  if (!aiReady() || (state.ai && state.ai.loaded && !force) || (state.ai && state.ai.loading)) return;
+  state.ai = { ...(state.ai || {}), loading: true };
+  try {
+    const [cfg, me, led] = await Promise.all([aiCall("/config"), aiCall("/me"), aiCall("/ledger")]);
+    let owner = null;
+    if (me.user.owner) { try { owner = { summary: await aiCall("/owner/summary"), users: (await aiCall("/owner/users")).users }; } catch { owner = null; } }
+    state.ai = { loaded: true, cfg, me: me.user, ledger: led.ledger, owner };
+  } catch (e) {
+    state.ai = { loaded: true, error: e.message };
+  }
+  render();
+}
+
+function renderAi() {
+  const peso = (cv) => `₱${(Number(cv || 0) / 100).toLocaleString("en-PH", { maximumFractionDigits: 2 })}`;
+  const whenAt = (ms) => new Date(ms).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "Asia/Manila" });
+  const head = pageHead("ILAW Assist", "sparkles", "AI-written ILAW lesson plans. 1 credit writes or rewrites one plan; a failed attempt returns the credit.");
+  if (!aiReady()) { main.innerHTML = head + panel(empty("ILAW Assist opens soon. You can already use Lesson planning with the free template draft.")); return; }
+  if (!state.ai || !state.ai.loaded) { aiLoad(); main.innerHTML = head + panel(empty("Loading your credits…")); return; }
+  const a = state.ai;
+  if (a.error) { main.innerHTML = head + panel(empty(esc(a.error))); return; }
+  const cfg = a.cfg, o = a.owner;
+  const label = { signup: "Free credits", purchase: "Top-up", ai: "AI writing", refund: "Returned", owner: "Adjustment" };
+  main.innerHTML = `${head}
+    ${aiDemo() ? `<div class="mb-4 rounded-[10px] bg-brand-900 text-[#c9ced6] px-4 py-2.5 text-sm"><strong class="text-white">Demo:</strong> sample text instead of real AI, and top-ups add credits without payment.</div>` : ""}
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
+      <div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-5"><div class="text-sm text-brand-600">Your balance</div><div class="text-4xl font-bold tabular mt-1">${a.me.credits}</div><div class="text-sm text-slate-500">AI credits</div>
+        ${state.role !== "admin" ? `<button data-act="ai-write" class="${btnDark} mt-3 w-full"><i data-lucide="sparkles" class="w-4 h-4"></i>Write a plan with AI</button>` : ""}</div>
+      ${cfg.packs.map((p) => `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-5 flex flex-col">
+        <div class="text-3xl font-bold">${p.credits}</div><div class="text-sm text-slate-500">credits</div>
+        <div class="mt-2 text-xl font-bold text-depedGold-500">₱${p.price}</div><div class="text-xs text-slate-500">₱${(p.price / p.credits).toFixed(2)} per plan</div>
+        <button data-act="ai-buy" data-pack="${p.id}" ${cfg.topups ? "" : "disabled"} class="mt-3 ${btnLight} ${cfg.topups ? "" : "opacity-50"}">Buy</button></div>`).join("")}
+    </div>
+    <p class="mt-2 text-xs text-slate-500">${cfg.topups ? `Pay with GCash, Maya or card through PayMongo. Receipts are issued by ${esc(cfg.business)}.` : "Top-ups open soon."} AI writing by Claude (Anthropic); you review and are responsible for your final plans.</p>
+    <div class="mt-5">${panel(panelHead("History") + (a.ledger.length ? table(["When", "What", "Amount", "Credits"], a.ledger.slice(0, 50).map((l) => `<tr>
+        <td class="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">${whenAt(l.created_at)}</td><td class="px-4 py-2.5">${label[l.kind] || esc(l.kind)}<div class="text-xs text-slate-500">${esc(l.note)}</div></td>
+        <td class="px-4 py-2.5 text-xs">${l.amount ? peso(l.amount) : ""}</td><td class="px-4 py-2.5 font-bold tabular ${l.delta > 0 ? "text-[#006300]" : ""}">${l.delta > 0 ? "+" : ""}${l.delta}</td></tr>`)) : empty("No activity yet.")))}</div>
+    ${o ? `<h3 class="mt-8 text-lg font-bold">Owner dashboard</h3>
+      <div class="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+        ${statTile("Sales (all time)", peso(o.summary.sales.amount), "bg-emerald-50")}${statTile("Sales (30 days)", peso(o.summary.sales30.amount), "bg-emerald-50")}
+        ${statTile("AI cost (30 days)", `₱${(o.summary.gens30.cost * 58).toFixed(2)}`, "bg-red-50")}${statTile("Users", o.summary.users, "bg-blue-50")}
+      </div>
+      <p class="text-xs text-slate-500 mt-2">${o.summary.sales.n} payments · ${o.summary.sales.credits} credits sold · ${o.summary.gens.n} AI plans · model ${esc(o.summary.model)}. AI cost at about ₱58/US$; PayMongo fees not included.</p>
+      <div class="mt-3">${panel(panelHead("Recent sales") + (o.summary.recent.length ? table(["When", "Buyer", "Credits", "Amount"], o.summary.recent.map((r) => `<tr><td class="px-4 py-2 text-xs text-slate-500">${whenAt(r.paid_at)}</td><td class="px-4 py-2">${esc(r.email)}</td><td class="px-4 py-2">${r.credits}</td><td class="px-4 py-2 font-semibold">${peso(r.amount)}</td></tr>`)) : empty("No sales yet.")))}</div>` : ""}`;
+}
+async function aiBuy(pack) {
+  try {
+    const r = await aiCall("/checkout", { pack });
+    if (r.demo) { state.ai.me.credits = r.credits; await aiLoad(true); toast(`Demo: +${r.added} credits added without payment.`); return; }
+    location.href = r.url;
+  } catch (e) { toast(e.message, "error"); }
+}
+// Back from PayMongo: confirm the payment (a few tries while it settles).
+async function aiConfirmTopup() {
+  toast("Confirming your payment…");
+  for (let i = 0; i < 8; i++) {
+    try { const r = await aiCall("/checkout/refresh", {}); if (r.added) { await aiLoad(true); toast(`Payment received: +${r.added} credits.`); return; } } catch { /* retry */ }
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  toast("Payment not confirmed yet. If you paid, your credits will appear shortly.", "warn");
+}
+async function writePlanWithAi(existing) {
+  const inp = genInput();
+  if (!inp.title) return toast("Enter the lesson title.", "warn");
+  const btn = document.querySelector('[data-act="plan-ai"]');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i>Writing… this can take a minute'; icons(); }
+  try {
+    const r = await aiCall("/generate", { title: inp.title, area: inp.subject, gradeSection: inp.gradeSection, competency: inp.competency,
+      sessions: Math.min(6, Math.max(1, Number(inp.sessions) || 1)), focus: inp.focus, context: inp.context, school: "San Vicente National High School" });
+    if (state.ai && state.ai.me) state.ai.me.credits = r.credits;
+    const filled = { sessions: r.sessions, cells: r.cells, references: r.references, aiUse: r.aiUse };
+    if (existing) {
+      Object.assign(state.planEdit, filled, { title: inp.title, area: inp.subject, gradeSection: inp.gradeSection, week: inp.week, subject: inp.subject });
+      closeModal(); savePlan(); render(); toast("Rewritten with AI. Review each part.");
+      return;
+    }
+    const ref = doc(collection(db, "ilaw"));
+    const plan = { ...blankPlan(), title: inp.title, area: inp.subject, teachers: myName(), gradeSection: inp.gradeSection, ...filled,
+      uid: state.user.uid, name: myName(), week: inp.week, subject: inp.subject, status: "draft", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...demoMark() };
+    await setDoc(ref, plan);
+    state.planId = ref.id;
+    state.planEdit = { ...plan, id: ref.id };
+    closeModal();
+    toast(`Written with AI. ${r.credits} credit${r.credits === 1 ? "" : "s"} left.`);
+    render();
+  } catch (e) {
+    toast(e.message, "error");
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="sparkles" class="w-4 h-4"></i>Write with AI · 1 credit'; icons(); }
   }
 }
 
@@ -3286,7 +3434,10 @@ document.addEventListener("click", async (e) => {
     case "score-filter": state.score.ptype = el.dataset.v; render(); break;
     case "cert": openCert(el.dataset.k); break;
     case "cert-go": generateCerts(el.dataset.id); break;
-    case "plan-new": openPlanGen(false); break;
+    case "plan-new": aiLoad(); openPlanGen(false); break;
+    case "plan-ai": writePlanWithAi(!!el.dataset.id); break;
+    case "ai-buy": aiBuy(el.dataset.pack); break;
+    case "ai-write": state.tab = "plans"; state.planId = null; state.planEdit = null; render(); aiLoad(); openPlanGen(false); break;
     case "plan-blank": createPlan(false); break;
     case "plan-gen": if (el.dataset.id) regeneratePlan(); else createPlan(true); break;
     case "plan-gen-open": openPlanGen(true); break;
