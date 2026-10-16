@@ -182,7 +182,7 @@ async function onUser(u) {
   if (state.user !== u) return; // signed out meanwhile
   state.role = isAdmin ? "admin" : "awardee";
   state.perms = perms;
-  // HR, Clinic and Head / Master Teachers land on Monitoring.
+  // Clinic and Head / Master Teachers land on Monitoring.
   state.tab = isAdmin ? "main" : perms ? "monitor" : "home";
   // Back from a PayMongo top-up: open ILAW Assist and confirm the payment.
   const back = new URLSearchParams(location.search);
@@ -372,9 +372,8 @@ function field(id, label, type = "text", extra = "") {
 // Public demo logins shown on the sign-in page. Demo accounts only see and change demo records (firestore.rules).
 const DEMO_LOGINS = [
   { role: "Admin", text: "PRAISE Committee: applicants and reviews, staff access, and reports from all monitoring (attendance, AOR, ILAW)", email: "demo.admin@svnhs-demo.ph", password: "Demo-Admin-2026" },
-  { role: "Head / Master Teacher", text: "Rose Aquino: weekly ILAW lesson plan check per subject area and teacher, and the ILAW report", email: "demo.headteacher@svnhs-demo.ph", password: "Demo-HeadTeacher-2026" },
+  { role: "Head / Master Teacher", text: "Rose Aquino: attendance of all personnel and the monthly attendance report, plus the weekly ILAW lesson plan check per subject area and teacher", email: "demo.headteacher@svnhs-demo.ph", password: "Demo-HeadTeacher-2026" },
   { role: "School Clinic", text: "Carmen Lopez: weekly AOR cleanest classroom ratings and the AOR report", email: "demo.clinic@svnhs-demo.ph", password: "Demo-Clinic-2026" },
-  { role: "HR", text: "Maria Santos: attendance sheet, month view, personnel and the monthly attendance report", email: "demo.hr@svnhs-demo.ph", password: "Demo-HR-2026" },
   { role: "Teacher", text: "Jhon Reyes: choose an award, list of MOV file names, Drive folder check", email: "demo.teacher@svnhs-demo.ph", password: "Demo-Teacher-2026" },
   { role: "Non-teaching staff", text: "Ana Lim: a submitted application under committee review", email: "demo.staff@svnhs-demo.ph", password: "Demo-Staff-2026" }
 ];
@@ -487,8 +486,8 @@ async function handleAuthSubmit(form) {
       });
       // Every account is on the personnel list (attendance, ILAW).
       await savePersonnelEntry(cred.user, name, position, dept);
-      // HR / Clinic / Head-Master Teacher: ask an admin for Monitoring access.
-      if (role) await sendAccessRequest(cred.user.email, name, position, { hr: role === "hr", clinic: role === "clinic", dll: role === "dll", subjects: role === "dll" ? subjects : [] });
+      // Clinic / Head-Master Teacher: ask an admin for Monitoring access.
+      if (role) await sendAccessRequest(cred.user.email, name, position, { hr: false, clinic: role === "clinic", dll: role === "dll", subjects: role === "dll" ? subjects : [] });
       await sendEmailVerification(cred.user);
       render();
     } else if (form.dataset.mode === "reset") {
@@ -1420,7 +1419,7 @@ const DLL_STATUS = {
 };
 // key, label, medal, points
 const PLACES = [["first", "1st", "🥇", 3], ["second", "2nd", "🥈", 2], ["third", "3rd", "🥉", 1]];
-const PERM_LABELS = [["hr", "HR"], ["clinic", "Clinic"], ["dll", "Head / Master Teacher"]];
+const PERM_LABELS = [["clinic", "Clinic"], ["dll", "Head / Master Teacher"]];
 
 function schoolYearStart() {
   const d = new Date();
@@ -1444,7 +1443,8 @@ function freshRep() {
 function permsFrom(snap) {
   if (!snap.exists()) return null;
   const m = snap.data();
-  const p = { hr: m.hr === true, clinic: m.clinic === true, dll: m.dll === true, subjects: (m.subjects || []).filter((s) => SUBJECTS.includes(s)) };
+  // Attendance (formerly HR's work) is done by Head / Master Teachers, so `hr` follows `dll`.
+  const p = { hr: m.dll === true, clinic: m.clinic === true, dll: m.dll === true, subjects: (m.subjects || []).filter((s) => SUBJECTS.includes(s)) };
   return p.hr || p.clinic || p.dll ? p : null;
 }
 async function loadPerms(email) {
@@ -1455,7 +1455,6 @@ async function loadPerms(email) {
 // The request waits in accessRequests/{email} until an admin approves it under Staff access.
 const SIGNUP_ROLES = [
   ["", "Teacher / Personnel (apply for an award)"],
-  ["hr", "Human Resource (HR)"],
   ["clinic", "School Clinic"],
   ["dll", "Head Teacher / Master Teacher"]
 ];
@@ -1467,17 +1466,16 @@ function roleFields(prefix, m) {
     <input type="checkbox" name="${prefix}-role" value="${value}" ${m && m[value] ? "checked" : ""} class="w-4 h-4 mt-0.5 rounded border-slate-300 text-brand-800">
     <span><span class="block text-sm font-bold text-slate-900">${text}</span><span class="block text-xs text-slate-500">${hint}</span></span></label>`;
   return `<div class="space-y-2">
-      ${check("hr", "Human Resource", "Attendance of teaching and non-teaching personnel")}
       ${check("clinic", "School Clinic", "AOR · cleanest classroom per week")}
-      ${check("dll", "Head Teacher / Master Teacher", "Weekly ILAW (lesson plan) check for the subject areas below")}
+      ${check("dll", "Head Teacher / Master Teacher", "Attendance of all personnel, and the weekly ILAW (lesson plan) check for the subject areas below")}
     </div>
     <div><div class="text-xs font-semibold text-slate-700 mb-1.5">Subject areas <span class="font-normal text-slate-400">(Head / Master Teacher only)</span></div>
       <div class="grid grid-cols-2 gap-1.5">${subjectChecks(`${prefix}-subject`, (m && m.subjects) || [])}</div></div>`;
 }
 function readRoles(prefix) {
   const on = (v) => !!document.querySelector(`input[name=${prefix}-role][value=${v}]:checked`);
-  const r = { hr: on("hr"), clinic: on("clinic"), dll: on("dll"), subjects: [] };
-  if (!r.hr && !r.clinic && !r.dll) return "Tick at least one kind of access.";
+  const r = { hr: false, clinic: on("clinic"), dll: on("dll"), subjects: [] };
+  if (!r.clinic && !r.dll) return "Tick at least one kind of access.";
   if (r.dll) {
     r.subjects = [...document.querySelectorAll(`input[name=${prefix}-subject]:checked`)].map((i) => i.value);
     if (!r.subjects.length) return "Pick the subject areas for Head / Master Teacher.";
@@ -1583,7 +1581,7 @@ function staffBar() {
       <button data-act="req-cancel" class="text-xs font-semibold text-amber-800 hover:underline">Cancel request</button></div>`;
   }
   return `<div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-    <span class="inline-flex items-center gap-2"><i data-lucide="clipboard-check" class="w-4 h-4 text-brand-600"></i>Are you HR, the School Clinic, or a Head / Master Teacher?</span>
+    <span class="inline-flex items-center gap-2"><i data-lucide="clipboard-check" class="w-4 h-4 text-brand-600"></i>Are you the School Clinic, or a Head / Master Teacher?</span>
     <button data-act="req-open" class="${btnLight}">Request Monitoring access</button></div>`;
 }
 
@@ -1696,7 +1694,7 @@ function renderMonitor() {
     ${body}`;
 }
 
-// ----- Attendance (HR) -----
+// ----- Attendance (Head / Master Teachers) -----
 function attendanceSummary(recs) {
   const m = {};
   for (const r of recs) {
@@ -1711,7 +1709,7 @@ function attendanceSummary(recs) {
 // 75 → "1 h 15 min"
 const fmtMins = (m) => (!m ? "—" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`);
 
-// Tardiness: HR enters the time in; minutes late are counted from the official start of the school day.
+// Tardiness: the Head / Master Teacher enters the time in; minutes late are counted from the official start of the school day.
 const SCHOOL_START = "07:30";
 const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m; };
 const minutesLate = (timeIn) => (/^\d{2}:\d{2}$/.test(timeIn || "") ? Math.max(0, toMins(timeIn) - toMins(SCHOOL_START)) : 0);
@@ -2304,7 +2302,7 @@ async function saveDll() {
 }
 
 // ----- Personnel list -----
-// Everyone who creates an account is on it, with the position they chose. HR can correct an entry;
+// Everyone who creates an account is on it, with the position they chose. Head / Master Teachers can correct an entry;
 // Head / Master Teachers see the teachers in their subject areas.
 const canEditPerson = () => state.perms.hr;
 
@@ -2879,7 +2877,7 @@ function renderScores() {
       <button data-act="cert" data-k="${k}" ${first ? "" : "disabled"} class="mt-auto ${btnDark} ${first ? "" : "opacity-40 cursor-not-allowed"}"><i data-lucide="file-badge" class="w-4 h-4"></i>${k === "perfect" && a.people.length > 1 ? `Certificates (${a.people.length})` : "Certificate"}</button>
     </div>`;
   };
-  main.innerHTML = `${pageHead("Scoreboard & awards", "medal", "Scores from HR attendance, ILAW lesson plans and the AOR cleanest classroom. Generate certificates for the winners.")}
+  main.innerHTML = `${pageHead("Scoreboard & awards", "medal", "Scores from attendance, ILAW lesson plans and the AOR cleanest classroom. Generate certificates for the winners.")}
     <div class="flex flex-wrap items-end gap-2 mb-5">
       <div>${lbl("score-from", "From")}<input id="score-from" type="date" data-act="score-date" data-i="0" value="${sc.from}" class="${inputCls}"></div>
       <div>${lbl("score-to", "To")}<input id="score-to" type="date" data-act="score-date" data-i="1" value="${sc.to}" class="${inputCls}"></div>
@@ -3039,7 +3037,7 @@ function monAccess() {
   const subjectsOf = (m) => (m.dll && (m.subjects || []).length ? esc(m.subjects.join(", ")) : "—");
   return `
     <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <p class="text-sm text-slate-600 max-w-2xl">Choose who can open Monitoring. People who sign up as HR, School Clinic or Head / Master Teacher appear under <strong>Waiting for approval</strong>. Admins already have full access.</p>
+      <p class="text-sm text-slate-600 max-w-2xl">Choose who can open Monitoring. People who sign up as School Clinic or Head / Master Teacher appear under <strong>Waiting for approval</strong>. Admins already have full access.</p>
       <button data-act="access-new" class="${btnDark}"><i data-lucide="user-plus" class="w-4 h-4"></i>Add staff</button>
     </div>
     ${reqs.length ? `<div class="mb-5 rounded-xl border-2 border-amber-300 overflow-hidden">${panel(panelHead(`<span class="inline-flex items-center gap-2"><i data-lucide="hourglass" class="w-4 h-4 text-amber-600"></i>Waiting for approval · ${reqs.length}</span>`)
@@ -3059,7 +3057,7 @@ function monAccess() {
           <td class="px-4 py-3 text-xs text-slate-600">${subjectsOf(m)}</td>
           <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("access-edit", m.id, "pencil", "Edit")}${delBtn("monitors", m.id)}</td>
         </tr>`))
-      : empty("No staff yet. Add the HR personnel, the School Clinic and the Head / Master Teachers.")))}`;
+      : empty("No staff yet. Add the School Clinic and the Head / Master Teachers.")))}`;
 }
 
 // Edit someone's access, or approve a request (the form starts with what they asked for).

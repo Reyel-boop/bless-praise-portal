@@ -11,8 +11,8 @@ rules_version = '2';
 // Monitoring
 //   monitors/{email}      Staff access: hr, clinic, dll (+ subjects). Admins manage it on the site.
 //   accessRequests/{email} Someone asking for Monitoring access. Admins approve or decline it.
-//   personnel/{id}        Teaching and non-teaching personnel. One per account (ID = uid), made at sign-up; HR can edit.
-//   attendance/{id}       Absences and tardiness. HR only.
+//   personnel/{id}        Teaching and non-teaching personnel. One per account (ID = uid), made at sign-up; Head / Master Teachers can edit.
+//   attendance/{id}       Absences and tardiness. Head / Master Teachers (formerly HR).
 //   aor/{week}            Cleanest classroom per week, top 3 per grade level 7–12 (week = Monday; demo-<week> for demo accounts). School Clinic only.
 //   dll/{week}_{pid}      ILAW (lesson plan) check per teacher per week. Head/Master Teachers, own subjects.
 //   ilaw/{id}             ILAW lesson plans written by teachers (Teacher tools → Lesson planning).
@@ -109,7 +109,7 @@ service cloud.firestore {
     }
     function monitorPath() { return /databases/$(database)/documents/monitors/$(request.auth.token.email); }
     function isMonitor() { return verified() && exists(monitorPath()); }
-    // can('hr'), can('clinic'), can('dll'): admins can do everything.
+    // can('dll'), can('clinic'), can('dll'): admins can do everything.
     function can(role) { return isAdmin() || (isMonitor() && get(monitorPath()).data.get(role, false) == true); }
     function mySubject(s) {
       return s in subjects() && (isAdmin() || (can('dll') && s in get(monitorPath()).data.get('subjects', [])));
@@ -160,15 +160,15 @@ service cloud.firestore {
     }
 
     match /personnel/{id} {
-      allow read: if isOwner(id) || ((can('hr') || can('dll')) && demoOk(resource.data));
-      allow create, update: if validPerson() && (ownPerson(id) || (can('hr') && demoOk(request.resource.data)))
+      allow read: if isOwner(id) || (can('dll') && demoOk(resource.data));
+      allow create, update: if validPerson() && (ownPerson(id) || (can('dll') && demoOk(request.resource.data)))
         && (resource == null || ownPerson(id) || demoOk(resource.data));
-      allow delete: if can('hr') && demoOk(resource.data);
+      allow delete: if can('dll') && demoOk(resource.data);
     }
 
     match /attendance/{id} {
-      allow read, delete: if can('hr') && demoOk(resource.data);
-      allow create, update: if can('hr') && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
+      allow read, delete: if can('dll') && demoOk(resource.data);
+      allow create, update: if can('dll') && demoOk(request.resource.data) && (resource == null || demoOk(resource.data))
         && request.resource.data.keys().hasOnly(['pid', 'name', 'ptype', 'type', 'date', 'kind', 'duration', 'timeIn', 'minutes', 'remarks', 'by', 'demo', 'createdAt', 'updatedAt'])
         && request.resource.data.pid is string
         && str(request.resource.data.name, 120)
