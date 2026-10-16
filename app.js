@@ -10,6 +10,7 @@ import {
 import { firebaseConfig, driveApiKey, aiApiUrl } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
+import { GUIDE_TITLE, GUIDE_SECTIONS } from "./guide.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS, VERSES } from "./data.js";
 
 // ---------- Helpers ----------
@@ -3332,8 +3333,6 @@ function buildDllReport(recs, from, to, subjects) {
 function renderGuide() {
   const step = (n, title, text, cls) => `<div class="rounded-xl border p-4 ${cls}"><div class="tabular text-xs font-extrabold opacity-70">STEP ${n}</div><div class="text-sm font-bold mt-0.5">${title}</div><div class="text-xs mt-0.5 opacity-80">${text}</div></div>`;
   const L = (c) => `<span class="text-depedGold-600 font-extrabold">${c}</span>`;
-  const objectives = ["Define MOVs per category", "Standardize portfolios", "Speed up validation", "Require authentic evidence",
-    "Strengthen accountability", "Support objective decisions", "Improve record-keeping", "Comply with CSC &amp; DepEd"];
   main.innerHTML = `<div class="max-w-4xl mx-auto bg-white rounded-[10px] border border-slate-200 shadow-sm p-6 sm:p-8 space-y-7">
     <div>
       <div class="text-xs font-bold text-depedGold-600 uppercase tracking-widest">DepEd Panabo City</div>
@@ -3350,17 +3349,19 @@ function renderGuide() {
       <p class="text-xs text-slate-500">Set Drive files to <strong class="text-slate-700">Anyone with the link can view</strong> so the committee can open them.</p>
     </section>
     <section class="space-y-3">
-      <h3 class="text-base font-bold text-brand-900 border-l-4 border-depedGold-500 pl-3">Why</h3>
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div class="rounded-xl p-4 bg-blue-50 border border-blue-200"><div class="text-sm font-bold text-blue-900">Fair</div><div class="text-xs text-slate-600 mt-0.5">Same rules for every category</div></div>
-        <div class="rounded-xl p-4 bg-emerald-50 border border-emerald-200"><div class="text-sm font-bold text-emerald-900">Verifiable</div><div class="text-xs text-slate-600 mt-0.5">Every award backed by real MOVs</div></div>
-        <div class="rounded-xl p-4 bg-amber-50 border border-amber-200"><div class="text-sm font-bold text-amber-900">Consistent</div><div class="text-xs text-slate-600 mt-0.5">One guide for nominees &amp; validators</div></div>
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 class="text-base font-bold text-brand-900 border-l-4 border-depedGold-500 pl-3">${GUIDE_TITLE}</h3>
+        <span class="text-[11px] font-bold uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">Draft</span>
       </div>
-    </section>
-    <section class="space-y-3">
-      <h3 class="text-base font-bold text-brand-900 border-l-4 border-emerald-600 pl-3">Objectives</h3>
-      <div class="flex flex-wrap gap-2">
-        ${objectives.map((o) => `<span class="text-xs font-semibold px-3 py-1.5 rounded-full bg-slate-100 text-slate-800 border border-slate-200">${o}</span>`).join("")}
+      <p class="text-xs text-slate-500">Activity design and guidelines for the School Search for Best Teacher, Best Non-Teaching Personnel, and Best Class Adviser.</p>
+      <div class="flex flex-wrap gap-1.5">
+        ${GUIDE_SECTIONS.map((g) => `<button data-act="guide-go" data-id="${g.id}" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-800">${g.title}</button>`).join("")}
+      </div>
+      <div class="divide-y divide-slate-200 border-y border-slate-200">
+        ${GUIDE_SECTIONS.map((g, i) => `<details id="guide-${g.id}" class="group py-1" ${i === 0 ? "open" : ""}>
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none py-3 text-sm font-bold text-slate-900 hover:text-depedGold-600">${g.title}<i data-lucide="chevron-down" class="w-4 h-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"></i></summary>
+          <div class="space-y-3 pb-5">${g.body}</div>
+        </details>`).join("")}
       </div>
     </section>
   </div>`;
@@ -3384,6 +3385,11 @@ document.addEventListener("click", async (e) => {
       break;
     case "signout": await signOut(auth); break;
     case "tab": state.tab = el.dataset.tab; render(); break;
+    case "guide-go": {
+      const d = document.getElementById(`guide-${el.dataset.id}`);
+      if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      break;
+    }
     case "auth-mode": state.authMode = el.dataset.mode; render(); break;
     case "demo-login": demoLogin(el.dataset.i); break;
     case "verify-continue": {
