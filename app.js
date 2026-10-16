@@ -283,7 +283,7 @@ function render() {
   else if (state.tab === "monitor" && state.perms) renderMonitor();
   else if (state.tab === "reports" && state.perms) renderReports();
   else if (state.tab === "scores" && state.perms && state.perms.admin) renderScores();
-  else if (state.tab === "plans" && state.role !== "admin") renderPlans();
+  else if (state.tab === "plans") renderPlans();
   else if (state.tab === "ai") renderAi();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
@@ -326,8 +326,8 @@ function renderHeader() {
     groups.push(["", state.role === "admin"
       ? [["main", "Applicants", "users"]]
       : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
-    if (state.role !== "admin" && myPType() === "teaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"], ["ai", `ILAW Assist${state.ai && state.ai.me ? ` (${state.ai.me.credits})` : ""}`, "sparkles"]]]);
-    if (state.role === "admin") groups.push(["ILAW Assist", [["ai", "ILAW Assist", "sparkles"]]]);
+    // Lesson planning and ILAW Assist: admins and all teaching personnel (everyone not set as non-teaching).
+    if (state.role === "admin" || myPType() !== "nonteaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"], ["ai", `ILAW Assist${state.ai && state.ai.me ? ` (${state.ai.me.credits})` : ""}`, "sparkles"]]]);
     if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"],
       ...(state.perms.admin ? [["scores", "Scoreboard & awards", "medal"]] : [])]]);
     groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
@@ -2400,6 +2400,7 @@ function watchMyPlans() {
 
 function renderPlans() {
   watchMyPlans();
+  aiLoad();
   if (state.planId) return renderPlanEditor();
   const list = Object.values(state.myPlans).sort((a, b) => b.week.localeCompare(a.week) || String(a.title).localeCompare(String(b.title)));
   main.innerHTML = `<div class="flex flex-wrap items-start justify-between gap-4 mb-5">
@@ -2407,6 +2408,12 @@ function renderPlans() {
         <p class="mt-1 text-[0.92rem] text-brand-600">Write your weekly ILAW lesson plans, generate a first draft, print them and submit them to your Head / Master Teacher. Deadline: ${ILAW_DEADLINE} of the week.</p></div>
       <button data-act="plan-new" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>New ILAW</button>
     </div>
+    ${aiReady() ? `<div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-blue-200 bg-blue-50/60 px-4 py-3">
+      <div class="flex items-center gap-2.5 text-sm text-blue-950"><i data-lucide="sparkles" class="w-4 h-4 text-depedGold-500"></i>
+        <span><strong>ILAW Assist${aiDemo() ? " (demo)" : ""}</strong> · ${state.ai && state.ai.me ? `${state.ai.me.credits} credit${state.ai.me.credits === 1 ? "" : "s"} left` : "loading credits…"} · AI writes a full ILAW for 1 credit.</span></div>
+      <div class="flex gap-2"><button data-act="ai-write" class="${btnDark}"><i data-lucide="sparkles" class="w-4 h-4"></i>Write with AI</button>
+        <button data-act="tab" data-tab="ai" class="${btnLight}">Credits &amp; top up</button></div>
+    </div>` : ""}
     ${panel(panelHead("My ILAW lesson plans", `<span class="text-sm text-brand-500">${list.length} plan${list.length === 1 ? "" : "s"}</span>`) + (list.length
       ? table(["Week", "Lesson", "Sessions", "Status", ""], list.map((p) => `<tr data-act="plan-open" data-id="${esc(p.id)}" class="cursor-pointer hover:bg-blue-50/50">
           <td class="px-4 py-3 text-xs font-semibold text-slate-700 whitespace-nowrap">${fmtWeek(p.week)}</td>
@@ -2703,7 +2710,7 @@ function renderAi() {
     ${aiDemo() ? `<div class="mb-4 rounded-[10px] bg-brand-900 text-[#c9ced6] px-4 py-2.5 text-sm"><strong class="text-white">Demo:</strong> sample text instead of real AI, and top-ups add credits without payment.</div>` : ""}
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
       <div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-5"><div class="text-sm text-brand-600">Your balance</div><div class="text-4xl font-bold tabular mt-1">${a.me.credits}</div><div class="text-sm text-slate-500">AI credits</div>
-        ${state.role !== "admin" ? `<button data-act="ai-write" class="${btnDark} mt-3 w-full"><i data-lucide="sparkles" class="w-4 h-4"></i>Write a plan with AI</button>` : ""}</div>
+        <button data-act="ai-write" class="${btnDark} mt-3 w-full"><i data-lucide="sparkles" class="w-4 h-4"></i>Write a plan with AI</button></div>
       ${cfg.packs.map((p) => `<div class="bg-brand-50 rounded-[10px] border border-black/10 shadow-sm p-5 flex flex-col">
         <div class="text-3xl font-bold">${p.credits}</div><div class="text-sm text-slate-500">credits</div>
         <div class="mt-2 text-xl font-bold text-depedGold-500">₱${p.price}</div><div class="text-xs text-slate-500">₱${(p.price / p.credits).toFixed(2)} per plan</div>
