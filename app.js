@@ -9,6 +9,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig, driveApiKey } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
+import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS } from "./data.js";
 
 // ---------- Helpers ----------
@@ -142,7 +143,7 @@ const state = {
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
-  perms: null, mon: null, rep: null, score: null, request: null, me: null, meLoaded: false,
+  perms: null, mon: null, rep: null, score: null, request: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", me: null, meLoaded: false,
   personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
@@ -165,7 +166,7 @@ async function onUser(u) {
   Object.assign(state, {
     user: u, role: null, profile: null, app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
-    perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
+    myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
     personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
@@ -274,6 +275,7 @@ function render() {
   else if (state.tab === "monitor" && state.perms) renderMonitor();
   else if (state.tab === "reports" && state.perms) renderReports();
   else if (state.tab === "scores" && state.perms && state.perms.admin) renderScores();
+  else if (state.tab === "plans" && state.role !== "admin") renderPlans();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
   icons();
@@ -311,6 +313,7 @@ function renderHeader() {
     groups.push(["", state.role === "admin"
       ? [["main", "Applicants", "users"]]
       : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
+    if (state.role !== "admin" && myPType() === "teaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"]]]);
     if (state.perms) groups.push(["Monitoring", [["monitor", "Monitoring", "clipboard-check"], ["reports", "Reports", "printer"],
       ...(state.perms.admin ? [["scores", "Scoreboard & awards", "medal"]] : [])]]);
     groups.push(["Help", [["guide", "Guidelines", "book-open"]]]);
@@ -2186,6 +2189,18 @@ function monDll() {
   if (!subs.includes(state.mon.subject)) state.mon.subject = subs[0];
   const s = state.mon.subject, w = state.mon.week;
   const teachers = dllTeachers(s);
+  // Plans submitted through Teacher tools → Lesson planning for this subject and week.
+  if (!state.watches.weekPlans || state.plansKey !== `${w}|${s}`) {
+    state.plansKey = `${w}|${s}`;
+    state.weekPlans = {};
+    watch("weekPlans", query(collection(db, "ilaw"), ...demoOnly(where("week", "==", w), where("subject", "==", s))), (d) => { state.weekPlans = d; });
+  }
+  const plansOf = (pid) => Object.values(state.weekPlans).filter((p) => p.uid === pid && p.status !== "draft");
+  // No status yet: take it from the submission time (On time / Late); Save keeps it.
+  for (const t of teachers) {
+    const c = dllCurrent(t.id), sub = plansOf(t.id).filter((p) => p.status === "submitted");
+    if (!c.status && !state.dllDrafts[t.id] && sub.length) state.dllDrafts[t.id] = { status: sub.some((p) => ilawTiming(p) === "ontime") ? "ontime" : "late", remarks: c.remarks, auto: true };
+  }
   const changed = new Set(dllChanges());
   const count = (k) => teachers.filter((t) => dllCurrent(t.id).status === k).length;
   const seg = (t, c) => Object.entries(DLL_STATUS).map(([k, st]) => `<label class="cursor-pointer">
@@ -2215,8 +2230,9 @@ function monDll() {
       ? table(["Teacher", "ILAW this week", "Remarks"], teachers.map((t) => {
           const c = dllCurrent(t.id);
           return `<tr class="${changed.has(t.id) ? "bg-amber-50/70" : ""}">
-            <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.position) || "Teacher"}</div></td>
-            <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5">${seg(t, c)}</div></td>
+            <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.position) || "Teacher"}</div>
+              ${plansOf(t.id).map((p) => `<button data-act="ilaw-view" data-id="${esc(p.id)}" class="mt-1 flex items-center gap-1.5 text-left text-[11px] text-depedGold-500 hover:underline"><i data-lucide="file-text" class="w-3.5 h-3.5 flex-shrink-0"></i><span>${esc(p.title || "ILAW")} · ${p.status === "returned" ? "returned" : `${ilawTiming(p) === "late" ? "late" : "on time"}, ${fmtWhen(tsDate(p.submittedAt))}`}${p.checkedBy ? " · checked" : ""}</span></button>`).join("")}</td>
+            <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5">${seg(t, c)}</div>${(state.dllDrafts[t.id] || {}).auto ? `<div class="text-[10px] text-slate-500 mt-1">From the submission time. Click Save to keep it.</div>` : ""}</td>
             <td class="px-4 py-3"><input id="dll-r-${esc(t.id)}" data-act="dll-remarks" data-pid="${esc(t.id)}" value="${esc(c.remarks)}" maxlength="300" placeholder="Remarks (optional)" class="w-full min-w-[180px] text-xs px-2.5 py-2 rounded-md border border-slate-300 focus:ring-1 focus:ring-blue-500"></td>
           </tr>`;
         }))
@@ -2327,6 +2343,261 @@ async function savePerson(id) {
     });
     closeModal();
     toast("Saved");
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
+// ----- Teacher tools: Lesson planning (ILAW) -----
+// Teachers write their weekly ILAW (one plan per lesson; several a week is fine), start from a generated draft,
+// add sessions or rows, print, and submit. Submitted before the deadline = On time, after = Late; the
+// Head / Master Teacher of that learning area sees it in Monitoring → ILAW.
+const ILAW_DEADLINE = "Monday 7:30 AM";
+const ilawDeadline = (week) => new Date(`${week}T07:30:00+08:00`);
+const tsDate = (t) => (t && t.toDate ? t.toDate() : t && t.seconds ? new Date(t.seconds * 1000) : null);
+const ilawTiming = (p) => { const d = tsDate(p.submittedAt); return d ? (d <= ilawDeadline(p.week) ? "ontime" : "late") : ""; };
+const fmtWhen = (d) => (d ? d.toLocaleString("en-PH", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "Asia/Manila" }) : "");
+function planPill(p) {
+  const t = ilawTiming(p);
+  const [label, cls] = p.status === "returned" ? ["Returned for revision", "bg-red-50 text-red-800 border-red-200"]
+    : p.status === "submitted" ? [`Submitted · ${t === "late" ? "Late" : "On time"}`, t === "late" ? "bg-amber-50 text-amber-800 border-amber-300" : "bg-emerald-50 text-emerald-800 border-emerald-300"]
+    : ["Draft", "bg-slate-100 text-slate-700 border-slate-300"];
+  return chip(label, cls) + (p.checkedBy ? " " + chip("Checked", "bg-blue-50 text-blue-800 border-blue-200") : "");
+}
+function watchMyPlans() {
+  if (state.watches.myPlans) return;
+  state.watches.myPlans = onSnapshot(query(collection(db, "ilaw"), where("uid", "==", state.user.uid)), (snap) => {
+    state.myPlans = {};
+    snap.forEach((d) => { state.myPlans[d.id] = { id: d.id, ...d.data() }; });
+    if (!state.planId) render(); // don't redraw the editor while typing
+  }, (e) => toast(errorText(e), "error"));
+}
+
+function renderPlans() {
+  watchMyPlans();
+  if (state.planId) return renderPlanEditor();
+  const list = Object.values(state.myPlans).sort((a, b) => b.week.localeCompare(a.week) || String(a.title).localeCompare(String(b.title)));
+  main.innerHTML = `<div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div class="min-w-0"><h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">Lesson planning</h2>
+        <p class="mt-1 text-[0.92rem] text-brand-600">Write your weekly ILAW lesson plans, generate a first draft, print them and submit them to your Head / Master Teacher. Deadline: ${ILAW_DEADLINE} of the week.</p></div>
+      <button data-act="plan-new" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>New ILAW</button>
+    </div>
+    ${panel(panelHead("My ILAW lesson plans", `<span class="text-sm text-brand-500">${list.length} plan${list.length === 1 ? "" : "s"}</span>`) + (list.length
+      ? table(["Week", "Lesson", "Sessions", "Status", ""], list.map((p) => `<tr data-act="plan-open" data-id="${esc(p.id)}" class="cursor-pointer hover:bg-blue-50/50">
+          <td class="px-4 py-3 text-xs font-semibold text-slate-700 whitespace-nowrap">${fmtWeek(p.week)}</td>
+          <td class="px-4 py-3"><div class="font-semibold text-slate-900">${esc(p.title) || "Untitled lesson"}</div><div class="text-xs text-slate-500">${esc(p.subject)}${p.gradeSection ? ` · ${esc(p.gradeSection)}` : ""}</div></td>
+          <td class="px-4 py-3 tabular text-xs text-slate-600">${(p.sessions || []).length}</td>
+          <td class="px-4 py-3">${planPill(p)}</td>
+          <td class="px-4 py-3 text-right whitespace-nowrap">${iconBtn("plan-print", p.id, "printer", "Print")}${p.status !== "submitted" ? iconBtn("plan-del", p.id, "trash-2", "Delete") : ""}</td>
+        </tr>`))
+      : empty("No lesson plans yet. Click New ILAW to generate your first draft.")))}`;
+}
+
+function openPlanGen(existing) {
+  const p = existing ? state.planEdit : {};
+  const me = state.me || {};
+  const subs = SUBJECTS.map((x) => [x, x]);
+  openModal(`${modalHead(existing ? "Generate a new draft" : "New ILAW lesson plan", "Fill in a few details; the portal drafts every part of the ILAW. You edit it after.")}
+    <div class="p-6 space-y-3">
+      ${existing ? `<p class="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">This replaces what is written in the plan's parts and sessions.</p>` : ""}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>${lbl("gen-week", "Week (any day)")}<input id="gen-week" type="date" value="${existing ? p.week : mondayOf(todayIso())}" class="w-full ${inputCls}"></div>
+        <div>${lbl("gen-subject", "Learning area")}${selectBox("gen-subject", "", subs, existing ? p.subject : me.subject || SUBJECTS[0], "w-full")}</div>
+      </div>
+      ${field("gen-title", "Lesson title", "text", `value="${esc(p.title || "")}" maxlength="200" placeholder="e.g. Photosynthesis"`)}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        ${field("gen-grade", "Grade level and section", "text", `value="${esc(p.gradeSection || me.advisory || "")}" maxlength="120" placeholder="e.g. Grade 7 – Rosal"`)}
+        ${field("gen-n", "No. of sessions", "number", `min="1" max="10" value="${existing ? (p.sessions || []).length : 3}"`)}
+      </div>
+      <div>${lbl("gen-comp", "Learning competency and standards")}<textarea id="gen-comp" rows="3" maxlength="2000" class="w-full ${inputCls}" placeholder="Paste the competency (and code) from the curriculum guide / MELC">${esc(existing ? ((p.cells || {}).competency || [])[0] || "" : "")}</textarea></div>
+      <div>${lbl("gen-focus", 'Focus of each session <span class="font-normal text-slate-400">(optional, one line per session)</span>')}<textarea id="gen-focus" rows="3" maxlength="1500" class="w-full ${inputCls}" placeholder="Session 1: parts of a leaf&#10;Session 2: the process&#10;Session 3: importance to life"></textarea></div>
+      <div>${lbl("gen-context", 'Learner context <span class="font-normal text-slate-400">(optional)</span>')}<textarea id="gen-context" rows="2" maxlength="1500" class="w-full ${inputCls}" placeholder="Your observations of the class"></textarea></div>
+    </div>
+    <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+      <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+      ${existing ? "" : `<button data-act="plan-blank" class="${btnLight}">Start blank</button>`}
+      <button data-act="plan-gen" data-id="${existing ? "1" : ""}" class="${btnDark}"><i data-lucide="wand-sparkles" class="w-4 h-4"></i>Generate draft</button>
+    </div>`);
+}
+
+function genInput() {
+  return {
+    week: isDay(val("gen-week")) ? mondayOf(val("gen-week")) : mondayOf(todayIso()),
+    subject: SUBJECTS.includes(val("gen-subject")) ? val("gen-subject") : SUBJECTS[0],
+    title: val("gen-title").slice(0, 200), gradeSection: val("gen-grade").slice(0, 120), competency: val("gen-comp"),
+    sessions: val("gen-n"), focus: val("gen-focus").split("\n").map((x) => x.replace(/^\s*session\s*\d+\s*[:.-]\s*/i, "")), context: val("gen-context")
+  };
+}
+async function createPlan(generate) {
+  const inp = genInput();
+  if (generate && !inp.title) return toast("Enter the lesson title.", "warn");
+  const draft = generate ? generatePlan({ ...inp, area: inp.subject, teacher: myName() }) : { ...blankPlan(), title: inp.title, area: inp.subject, teachers: myName(), gradeSection: inp.gradeSection };
+  const ref = doc(collection(db, "ilaw"));
+  const plan = { ...draft, uid: state.user.uid, name: myName(), week: inp.week, subject: inp.subject, status: "draft", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...demoMark() };
+  try {
+    await setDoc(ref, plan);
+    state.planId = ref.id;
+    state.planEdit = { ...plan, id: ref.id };
+    closeModal();
+    toast(generate ? "Draft generated. Review and edit each part." : "Blank ILAW created.");
+    render();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+function regeneratePlan() {
+  const inp = genInput();
+  if (!inp.title) return toast("Enter the lesson title.", "warn");
+  const g = generatePlan({ ...inp, area: inp.subject, teacher: state.planEdit.teachers || myName() });
+  Object.assign(state.planEdit, { title: g.title, area: g.area, gradeSection: g.gradeSection, sessions: g.sessions, cells: g.cells, week: inp.week, subject: inp.subject,
+    references: state.planEdit.references || g.references, aiUse: state.planEdit.aiUse || g.aiUse });
+  closeModal();
+  savePlan();
+  render();
+  toast("New draft generated.");
+}
+
+function renderPlanEditor() {
+  if (!state.planEdit || state.planEdit.id !== state.planId) {
+    const src = state.myPlans[state.planId];
+    if (!src) { main.innerHTML = `<div class="py-24 text-center text-slate-400 text-sm">Loading…</div>`; return; }
+    state.planEdit = JSON.parse(JSON.stringify(src));
+  }
+  const p = state.planEdit;
+  const locked = p.status === "submitted";
+  const dis = locked ? "disabled" : "";
+  const n = (p.sessions || []).length;
+  const ta = (id, act, attrs, value, rows = 3) => `<textarea id="${id}" data-act="${act}" ${attrs} rows="${rows}" ${dis} class="w-full text-sm px-2.5 py-2 rounded-md border border-slate-300 focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 resize-y">${esc(value || "")}</textarea>`;
+  const late = !locked && new Date() > ilawDeadline(p.week);
+  main.innerHTML = `
+    <button data-act="plan-back" class="mb-3 inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-900"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i>All lesson plans</button>
+    <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+      <div class="min-w-0"><h2 class="text-[1.4rem] font-bold tracking-tight text-brand-950">${esc(p.title) || "Untitled lesson"}</h2>
+        <div class="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600">${planPill(p)}<span>Week of ${fmtWeek(p.week)} · deadline ${fmtWhen(ilawDeadline(p.week))}</span>
+          <span id="plan-saved" class="text-xs text-slate-400"></span></div></div>
+      <div class="flex flex-wrap gap-2">
+        ${locked ? "" : `<button data-act="plan-gen-open" class="${btnLight}"><i data-lucide="wand-sparkles" class="w-4 h-4"></i>Generate draft</button>`}
+        <button data-act="plan-print" data-id="${esc(p.id)}" class="${btnLight}"><i data-lucide="printer" class="w-4 h-4"></i>Print</button>
+        ${locked ? "" : `<button data-act="plan-submit" class="${btnDark}"><i data-lucide="send" class="w-4 h-4"></i>${p.status === "returned" ? "Resubmit" : "Submit"}</button>`}
+      </div>
+    </div>
+    ${p.status === "returned" ? `<div class="mb-4 rounded-[10px] border border-red-200 bg-red-50 p-4 text-sm text-red-900"><strong>Returned for revision.</strong> ${esc(p.returnNote || "")}</div>` : ""}
+    ${locked ? `<div class="mb-4 rounded-[10px] border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">Submitted ${fmtWhen(tsDate(p.submittedAt))} (${ilawTiming(p) === "late" ? "late" : "on time"}). It can be edited again if your Head / Master Teacher returns it.${p.checkedBy ? ` Checked by <strong>${esc(p.checkedBy)}</strong>.` : ""}</div>`
+      : late ? `<div class="mb-4 rounded-[10px] border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">The deadline for this week has passed; submitting now counts as Late.</div>` : ""}
+    ${panel(panelHead("Lesson details") + `<div class="px-5 pb-5 grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div>${lbl("plan-week", "Week (any day)")}<input id="plan-week" type="date" data-act="plan-week" value="${p.week}" ${dis} class="w-full ${inputCls}"></div>
+      <div>${lbl("plan-subject", "Learning area (sent to its Head / Master Teacher)")}<select id="plan-subject" data-act="plan-subject" ${dis} class="w-full ${inputCls}">${SUBJECTS.map((x) => `<option ${p.subject === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+      ${ILAW_HEAD.map(([k, label, help]) => `<div class="${k === "references" || k === "aiUse" ? "lg:col-span-2" : ""}">${lbl(`pf-${k}`, label)}${help ? `<p class="text-[11px] text-slate-500 -mt-0.5 mb-1">${help}</p>` : ""}${ta(`pf-${k}`, "plan-field", `data-k="${k}"`, p[k], k === "references" || k === "aiUse" ? 3 : 1)}</div>`).join("")}
+      <div class="text-sm text-slate-600">No. of sessions: <strong>${n}</strong></div>
+    </div>`)}
+    <div class="my-4 flex flex-wrap items-center gap-2">
+      <span class="text-sm font-semibold text-slate-700">Sessions</span>
+      ${(p.sessions || []).map((x, i) => `<span class="inline-flex items-center gap-1 rounded-lg border border-black/10 bg-brand-50 pl-2 pr-1 py-1">
+        <input id="ps-${i}" data-act="plan-slabel" data-i="${i}" value="${esc(x)}" maxlength="60" ${dis} class="w-36 text-sm bg-transparent border-0 p-0 focus:ring-0">
+        ${!locked && n > 1 ? `<button data-act="plan-sdel" data-i="${i}" title="Remove this session" class="p-1 rounded text-slate-400 hover:text-red-600"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ""}</span>`).join("")}
+      ${locked || n >= 10 ? "" : `<button data-act="plan-sadd" class="${btnLight}"><i data-lucide="plus" class="w-4 h-4"></i>Add session</button>`}
+    </div>
+    <div class="space-y-4">${planRows(p).map((part) => panel(`
+      <div class="px-5 py-3 bg-brand-100 border-b border-black/10"><div class="font-bold text-brand-950">${part.title}</div><div class="text-xs text-slate-600 whitespace-pre-line mt-0.5">${esc(part.intro)}</div></div>
+      <div class="divide-y divide-black/10">${part.rows.map((r) => `<div class="p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0"><div class="text-sm font-semibold text-slate-900">${esc(r.label)}</div>
+            ${r.help ? `<details class="text-[11px] text-slate-500"><summary class="cursor-pointer select-none">Guide</summary><div class="whitespace-pre-line mt-1">${esc(r.help)}</div></details>` : ""}</div>
+          ${r.custom && !locked ? `<button data-act="plan-rowdel" data-id="${esc(r.key)}" title="Remove this row" class="p-1.5 rounded-md text-red-500 hover:bg-red-50"><i data-lucide="trash-2" class="w-4 h-4"></i></button>` : ""}
+        </div>
+        <div class="mt-2 overflow-x-auto"><div class="grid gap-2" style="grid-template-columns:repeat(${n},minmax(240px,1fr))">
+          ${(p.sessions || []).map((x, i) => `<div><div class="text-[11px] font-semibold text-slate-500 mb-0.5">${esc(x)}</div>${ta(`pc-${r.key}-${i}`, "plan-cell", `data-k="${esc(r.key)}" data-i="${i}"`, ((p.cells || {})[r.key] || [])[i], r.key === "flow" ? 7 : 4)}</div>`).join("")}
+        </div></div>
+      </div>`).join("")}
+      ${locked ? "" : `<div class="px-4 pb-4"><button data-act="plan-rowadd" data-part="${part.key}" class="text-xs font-semibold text-depedGold-500 hover:underline">+ Add row to ${part.title.replace(".", "")}</button></div>`}</div>`)).join("")}
+    </div>`;
+}
+
+// Saving: typed text is kept in state.planEdit and saved a second after the last keystroke.
+let planTimer;
+function savePlanSoon() {
+  const el = document.getElementById("plan-saved");
+  if (el) el.textContent = "Saving…";
+  clearTimeout(planTimer);
+  planTimer = setTimeout(savePlan, 1000);
+}
+function planFields(p) {
+  const cells = {};
+  for (const [k, arr] of Object.entries(p.cells || {})) cells[k] = (p.sessions || []).map((_, i) => String((arr || [])[i] || "").slice(0, 5000));
+  return { title: p.title || "", area: p.area || "", teachers: p.teachers || "", gradeSection: p.gradeSection || "", references: p.references || "", aiUse: p.aiUse || "",
+    sessions: (p.sessions || []).map((x) => String(x).slice(0, 60)), cells, custom: p.custom || [], week: p.week, subject: p.subject };
+}
+async function savePlan(extra = {}) {
+  clearTimeout(planTimer);
+  const p = state.planEdit;
+  if (!p) return;
+  try {
+    await updateDoc(doc(db, "ilaw", p.id), { ...planFields(p), ...extra, updatedAt: serverTimestamp(), ...demoMark() });
+    const el = document.getElementById("plan-saved");
+    if (el) el.textContent = "All changes saved";
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+function confirmPlanSubmit() {
+  const p = state.planEdit;
+  if (!p.title.trim()) return toast("Enter the lesson title first.", "warn");
+  const late = new Date() > ilawDeadline(p.week);
+  openModal(`<div class="p-6 space-y-3">
+    <h3 class="text-lg font-bold text-slate-900">${p.status === "returned" ? "Resubmit" : "Submit"} this ILAW?</h3>
+    <p class="text-sm text-slate-600"><strong>${esc(p.title)}</strong> goes to the ${esc(p.subject)} Head / Master Teacher for the week of ${fmtWeek(p.week)}.</p>
+    <p class="text-sm font-semibold ${late ? "text-amber-700" : "text-emerald-700"}">${late ? "The deadline has passed, so it counts as Late." : `Before the deadline (${fmtWhen(ilawDeadline(p.week))}): On time.`}</p>
+    <p class="text-xs text-slate-500">You can't edit it after submitting unless it is returned to you.</p>
+  </div>
+  <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+    <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+    <button data-act="plan-submit-yes" class="${btnDark}">Submit</button>
+  </div>`);
+}
+async function submitPlan() {
+  await savePlan({ status: "submitted", submittedAt: serverTimestamp() });
+  state.planEdit.status = "submitted";
+  state.planEdit.submittedAt = { seconds: Date.now() / 1000 };
+  closeModal();
+  toast("ILAW submitted.");
+  render();
+}
+function printPlan(id) {
+  const p = id && state.myPlans[id] && (!state.planEdit || state.planEdit.id !== id) ? state.myPlans[id]
+    : id && state.weekPlans[id] ? state.weekPlans[id] : state.planEdit;
+  if (!p) return;
+  const w = window.open("", "_blank");
+  if (!w) return toast("Allow pop-ups for this site to open the plan.", "warn");
+  w.document.write(ilawPrint(p, { esc, baseUrl: new URL(".", location.href).href, checkedBy: p.checkedBy }));
+  w.document.close();
+}
+
+// Head / Master Teacher: open a submitted plan, mark it checked or return it.
+function openIlawView(id) {
+  const p = state.weekPlans[id];
+  if (!p) return;
+  openModal(`${modalHead(esc(p.title || "ILAW"), `${esc(p.name)} · ${esc(p.subject)}${p.gradeSection ? ` · ${esc(p.gradeSection)}` : ""}`)}
+    <div class="p-6 space-y-3">
+      <div class="text-sm">${planPill(p)} <span class="text-slate-600 ml-1">Submitted ${fmtWhen(tsDate(p.submittedAt))} · deadline ${fmtWhen(ilawDeadline(p.week))}</span></div>
+      <button data-act="plan-print" data-id="${esc(id)}" class="${btnLight}"><i data-lucide="file-text" class="w-4 h-4"></i>Open the ILAW (printable)</button>
+      <div>${lbl("ilaw-note", 'Note to the teacher <span class="font-normal text-slate-400">(needed to return it)</span>')}
+        <textarea id="ilaw-note" rows="3" maxlength="500" class="w-full ${inputCls}">${esc(p.returnNote || "")}</textarea></div>
+    </div>
+    <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+      <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Close</button>
+      <button data-act="ilaw-return" data-id="${esc(id)}" class="${btnLight} !text-red-700">Return for revision</button>
+      <button data-act="ilaw-check" data-id="${esc(id)}" class="${btnDark}"><i data-lucide="check" class="w-4 h-4"></i>Mark as checked</button>
+    </div>`);
+}
+async function ilawDecision(id, ret) {
+  const note = val("ilaw-note").slice(0, 500);
+  if (ret && !note) return toast("Write a note so the teacher knows what to revise.", "warn");
+  try {
+    await updateDoc(doc(db, "ilaw", id), ret
+      ? { status: "returned", returnNote: note, updatedAt: serverTimestamp() }
+      : { checkedBy: myName(), checkedAt: serverTimestamp(), returnNote: note, updatedAt: serverTimestamp() });
+    closeModal();
+    toast(ret ? "Returned to the teacher" : "Marked as checked");
   } catch (e) {
     toast(errorText(e), "error");
   }
@@ -3000,6 +3271,39 @@ document.addEventListener("click", async (e) => {
     case "score-filter": state.score.ptype = el.dataset.v; render(); break;
     case "cert": openCert(el.dataset.k); break;
     case "cert-go": generateCerts(el.dataset.id); break;
+    case "plan-new": openPlanGen(false); break;
+    case "plan-blank": createPlan(false); break;
+    case "plan-gen": if (el.dataset.id) regeneratePlan(); else createPlan(true); break;
+    case "plan-gen-open": openPlanGen(true); break;
+    case "plan-open": state.planId = el.dataset.id; state.planEdit = null; render(); window.scrollTo({ top: 0 }); break;
+    case "plan-back": if (state.planEdit) savePlan(); state.planId = null; state.planEdit = null; render(); break;
+    case "plan-print": printPlan(el.dataset.id); break;
+    case "plan-del": openModal(`<div class="p-6 space-y-2"><h3 class="text-lg font-bold">Delete this lesson plan?</h3><p class="text-sm text-slate-600">${esc((state.myPlans[el.dataset.id] || {}).title || "Untitled lesson")} will be deleted. This can't be undone.</p></div>
+      <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2"><button data-close class="px-4 py-2 text-xs font-semibold text-slate-600">Cancel</button><button data-act="plan-del-yes" data-id="${esc(el.dataset.id)}" class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold">Delete</button></div>`); break;
+    case "plan-del-yes": try { await deleteDoc(doc(db, "ilaw", el.dataset.id)); closeModal(); toast("Deleted"); } catch (err) { toast(errorText(err), "error"); } break;
+    case "plan-sadd": state.planEdit.sessions.push(`Session ${state.planEdit.sessions.length + 1}`); savePlan(); render(); break;
+    case "plan-sdel": {
+      const i = Number(el.dataset.i);
+      state.planEdit.sessions.splice(i, 1);
+      for (const k of Object.keys(state.planEdit.cells || {})) (state.planEdit.cells[k] || []).splice(i, 1);
+      savePlan(); render(); break;
+    }
+    case "plan-rowadd": openModal(`${modalHead("Add a row", "Your own row in this part of the ILAW")}<div class="p-6">${field("row-label", "Row title", "text", 'maxlength="80" placeholder="e.g. Values integration"')}</div>${modalFoot("plan-rowadd-yes", "Add row", el.dataset.part)}`); break;
+    case "plan-rowadd-yes": {
+      const label = val("row-label");
+      if (!label) return toast("Enter the row title.", "warn");
+      (state.planEdit.custom ||= []).push({ id: `c${Date.now()}`, part: el.dataset.id, label: label.slice(0, 80) });
+      closeModal(); savePlan(); render(); break;
+    }
+    case "plan-rowdel":
+      state.planEdit.custom = (state.planEdit.custom || []).filter((c) => c.id !== el.dataset.id);
+      delete (state.planEdit.cells || {})[el.dataset.id];
+      savePlan(); render(); break;
+    case "plan-submit": confirmPlanSubmit(); break;
+    case "plan-submit-yes": submitPlan(); break;
+    case "ilaw-view": openIlawView(el.dataset.id); break;
+    case "ilaw-check": ilawDecision(el.dataset.id, false); break;
+    case "ilaw-return": ilawDecision(el.dataset.id, true); break;
     case "mon-view":
       if (state.mon.view === "dll" && !dllDiscardOk()) break;
       if (state.mon.view === "dll") state.dllDrafts = {};
@@ -3075,6 +3379,8 @@ document.addEventListener("change", (e) => {
     case "dll-status": (state.dllDrafts[el.dataset.pid] ||= {}).status = el.value; render(); break;
     case "rep-date": state.rep[el.dataset.k][Number(el.dataset.i)] = el.value; break;
     case "rep-type": state.rep.attType = el.value; break;
+    case "plan-week": if (isDay(el.value) && state.planEdit) { state.planEdit.week = mondayOf(el.value); savePlan(); render(); } break;
+    case "plan-subject": if (state.planEdit && SUBJECTS.includes(el.value)) { state.planEdit.subject = el.value; savePlan(); render(); } break;
     case "score-date": if (isDay(el.value)) { state.score[el.dataset.i === "0" ? "from" : "to"] = el.value; render(); } break;
     case "rep-month": if (/^\d{4}-\d{2}$/.test(el.value)) state.rep.att = monthRange(el.value); break;
     case "rep-subject": state.rep.dllSubject = el.value; break;
@@ -3087,6 +3393,9 @@ document.addEventListener("input", (e) => {
   if (el.dataset.act === "folder") state.folderDraft = el.value;
   if (el.dataset.act === "filter" && el.tagName === "INPUT") { state.filter.q = el.value; render(); }
   if (el.dataset.act === "mon-q") { state.mon.q = el.value; render(); }
+  if (el.dataset.act === "plan-field" && state.planEdit) { state.planEdit[el.dataset.k] = el.value; savePlanSoon(); }
+  if (el.dataset.act === "plan-cell" && state.planEdit) { const c = (state.planEdit.cells ||= {}); (c[el.dataset.k] ||= [])[Number(el.dataset.i)] = el.value; savePlanSoon(); }
+  if (el.dataset.act === "plan-slabel" && state.planEdit) { state.planEdit.sessions[Number(el.dataset.i)] = el.value; savePlanSoon(); }
   if (el.dataset.act === "dll-remarks") { (state.dllDrafts[el.dataset.pid] ||= {}).remarks = el.value; render(); }
   if (el.dataset.act === "att-time") $("#att-late-calc").innerHTML = lateText(el.value);
 });

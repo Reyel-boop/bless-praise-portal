@@ -15,6 +15,7 @@ rules_version = '2';
 //   attendance/{id}       Absences and tardiness. HR only.
 //   aor/{week}            Cleanest classroom per week, top 3 per grade level 7–12 (week = Monday; demo-<week> for demo accounts). School Clinic only.
 //   dll/{week}_{pid}      ILAW (lesson plan) check per teacher per week. Head/Master Teachers, own subjects.
+//   ilaw/{id}             ILAW lesson plans written by teachers (Teacher tools → Lesson planning).
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -192,6 +193,30 @@ service cloud.firestore {
         && request.resource.data.get('grades', {}).keys().hasOnly(['7', '8', '9', '10', '11', '12'])
         && str(request.resource.data.get('first', ''), 80) && str(request.resource.data.get('second', ''), 80) && str(request.resource.data.get('third', ''), 80)
         && str(request.resource.data.remarks, 300);
+    }
+
+    // ILAW lesson plans written in Teacher tools → Lesson planning. The teacher owns drafts; once submitted,
+    // the Head / Master Teacher of that learning area can mark it checked or return it for revision.
+    function ilawOk(d) {
+      return d.uid is string && isDay(d.week) && d.subject in subjects()
+        && d.status in ['draft', 'submitted', 'returned']
+        && d.sessions is list && d.sessions.size() >= 1 && d.sessions.size() <= 10
+        && d.cells is map && d.custom is list && d.custom.size() <= 20
+        && str(d.get('title', ''), 200) && str(d.get('gradeSection', ''), 120) && str(d.get('returnNote', ''), 500);
+    }
+    match /ilaw/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid)
+        || (mySubject(resource.data.subject) && demoOk(resource.data));
+      allow create: if verified() && request.resource.data.uid == request.auth.uid
+        && request.resource.data.status == 'draft' && ilawOk(request.resource.data);
+      allow update: if (verified() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid
+            && resource.data.status in ['draft', 'returned'] && request.resource.data.status in ['draft', 'submitted', 'returned']
+            && request.resource.data.get('checkedBy', '') == resource.data.get('checkedBy', '')
+            && ilawOk(request.resource.data))
+        || (mySubject(resource.data.subject) && demoOk(resource.data) && resource.data.status != 'draft'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'returnNote', 'checkedBy', 'checkedAt', 'updatedAt'])
+            && request.resource.data.status in ['submitted', 'returned'] && str(request.resource.data.get('returnNote', ''), 500));
+      allow delete: if verified() && resource.data.uid == request.auth.uid && resource.data.status != 'submitted';
     }
 
     match /dll/{id} {
