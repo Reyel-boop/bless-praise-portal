@@ -10,7 +10,7 @@ import {
 import { firebaseConfig, driveApiKey } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
-import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS } from "./data.js";
+import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS, VERSES } from "./data.js";
 
 // ---------- Helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -282,6 +282,10 @@ function render() {
   enterView(main, [state.user ? state.user.uid : "", state.user && state.user.emailVerified, state.role, state.loaded, state.tab, state.selected,
     state.mon && state.mon.view, state.mon && state.mon.attMode].join("|"));
   reveal(main);
+  if (document.getElementById("hero-verse")) {
+    showHeroVerse(false);
+    if (!verseTimer) verseTimer = setInterval(() => showHeroVerse(true), 15000);
+  }
   const sky = document.getElementById("ld-canvas");
   if (sky && !sky.dataset.on) { sky.dataset.on = "1"; constellation(sky); }
 
@@ -369,6 +373,16 @@ async function demoLogin(i) {
 }
 
 let heroPlayed = false;
+// Bible verse on the sign-in page: a random one each visit, then a new one every 15 seconds.
+let verseAt = Math.floor(Math.random() * VERSES.length), verseTimer = null;
+function showHeroVerse(next) {
+  const el = document.getElementById("hero-verse");
+  if (!el) return;
+  if (next) verseAt++;
+  const [text, ref] = VERSES[verseAt % VERSES.length];
+  el.style.opacity = 0;
+  setTimeout(() => { el.innerHTML = `"${esc(text)}" <span class="not-italic font-semibold text-[#2bd47a]">- ${esc(ref)}</span>`; el.style.opacity = 1; }, next ? 400 : 0);
+}
 function renderAuth() {
   const mode = state.authMode;
   const tab = (m, label) => `<button type="button" data-act="auth-mode" data-mode="${m}" class="flex-1 py-1.5 text-sm font-semibold rounded-md transition ${mode === m ? "bg-white/10 text-white" : "text-[#8b94a4] hover:text-white"}">${label}</button>`;
@@ -412,6 +426,7 @@ function renderAuth() {
             <span class="ld-word" style="--i:0"><span>Excellence</span></span><br><span class="ld-word" style="--i:1"><span class="ld-grad">isn’t luck.</span></span>
           </h2>
           <p class="ld-fade mt-5 max-w-[30rem] text-[#b3bccb] text-[clamp(0.98rem,1.4vw,1.12rem)] leading-relaxed" style="--d:.8s">Every MOV linked. Every award verified. Attendance, AOR and ILAW lesson plans monitored in one place.</p>
+          <div class="ld-fade mt-6 max-w-[32rem] border-l-2 border-[#2bd47a] pl-4" style="--d:1.1s"><p id="hero-verse" class="text-sm italic leading-relaxed text-[#e9eef6] transition-opacity duration-500"></p></div>
         </div>
         <div class="ld-fade ld-auth lg:justify-self-end w-full max-w-none lg:max-w-[420px]" style="--d:.45s">
           <div class="rounded-[10px] border border-white/10 bg-[rgba(17,21,29,0.78)] backdrop-blur-xl shadow-[0_30px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8 max-h-[calc(100dvh-2rem)] overflow-y-auto">

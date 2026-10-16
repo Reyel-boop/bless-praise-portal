@@ -306,3 +306,27 @@ export const OFFICES = [
   "Maintenance / Utility",
   "Other office"
 ];
+
+// Rotating reminder on the sign-in page (King James Version, public domain).
+export const VERSES = [
+  ["Thy word is a lamp unto my feet, and a light unto my path.", "Psalm 119:105"],
+  ["Train up a child in the way he should go: and when he is old, he will not depart from it.", "Proverbs 22:6"],
+  ["And whatsoever ye do, do it heartily, as to the Lord, and not unto men.", "Colossians 3:23"],
+  ["If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him.", "James 1:5"],
+  ["I can do all things through Christ which strengtheneth me.", "Philippians 4:13"],
+  ["Commit thy works unto the LORD, and thy thoughts shall be established.", "Proverbs 16:3"],
+  ["But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary; and they shall walk, and not faint.", "Isaiah 40:31"],
+  ["And let us not be weary in well doing: for in due season we shall reap, if we faint not.", "Galatians 6:9"],
+  ["Trust in the LORD with all thine heart; and lean not unto thine own understanding. In all thy ways acknowledge him, and he shall direct thy paths.", "Proverbs 3:5-6"],
+  ["Be strong and of a good courage; be not afraid, neither be thou dismayed: for the LORD thy God is with thee whithersoever thou goest.", "Joshua 1:9"],
+  ["I will instruct thee and teach thee in the way which thou shalt go: I will guide thee with mine eye.", "Psalm 32:8"],
+  ["Let your light so shine before men, that they may see your good works, and glorify your Father which is in heaven.", "Matthew 5:16"],
+  ["Study to shew thyself approved unto God, a workman that needeth not to be ashamed, rightly dividing the word of truth.", "2 Timothy 2:15"],
+  ["Give instruction to a wise man, and he will be yet wiser: teach a just man, and he will increase in learning.", "Proverbs 9:9"],
+  ["Be ye stedfast, unmoveable, always abounding in the work of the Lord, forasmuch as ye know that your labour is not in vain in the Lord.", "1 Corinthians 15:58"],
+  ["And let the beauty of the LORD our God be upon us: and establish thou the work of our hands upon us.", "Psalm 90:17"],
+  ["Rejoicing in hope; patient in tribulation; continuing instant in prayer.", "Romans 12:12"],
+  ["His compassions fail not. They are new every morning: great is thy faithfulness.", "Lamentations 3:22-23"],
+  ["What doth the LORD require of thee, but to do justly, and to love mercy, and to walk humbly with thy God?", "Micah 6:8"],
+  ["The fear of the LORD is the beginning of wisdom: and the knowledge of the holy is understanding.", "Proverbs 9:10"]
+];
