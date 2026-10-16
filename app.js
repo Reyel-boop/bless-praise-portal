@@ -11,6 +11,7 @@ import { firebaseConfig, driveApiKey, aiApiUrl } from "./firebase-config.js";
 import { initFx, enterView, reveal, constellation } from "./fx.js";
 import { ILAW_HEAD, planRows, blankPlan, generatePlan, ilawPrint } from "./ilaw.js";
 import { GUIDE_TITLE, GUIDE_SECTIONS } from "./guide.js";
+import { showcaseHTML, SAMPLE_AWARDEES, AWARD_NAMES, resizePhoto } from "./showcase.js";
 import { CATEGORIES, AWARD_GROUPS, GENERAL, SUBJECTS, ABSENCE_KINDS, POSITIONS, OFFICES, CHECKERS, VERSES } from "./data.js";
 
 // ---------- Helpers ----------
@@ -144,6 +145,7 @@ const state = {
   tab: "main", authMode: "login", unsubs: [],
   linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
   // Monitoring (see the Monitoring section below)
+  awardees: null, awAdmin: null, awDraft: null,
   ai: null, perms: null, mon: null, rep: null, score: null, request: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", me: null, meLoaded: false,
   personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
@@ -159,6 +161,7 @@ if (!configured) {
   auth = getAuth(fb);
   db = getFirestore(fb);
   onAuthStateChanged(auth, onUser);
+  loadAwardees();
 }
 
 async function onUser(u) {
@@ -284,6 +287,7 @@ function render() {
   else if (state.tab === "reports" && state.perms) renderReports();
   else if (state.tab === "scores" && state.perms && state.perms.admin) renderScores();
   else if (state.tab === "plans") renderPlans();
+  else if (state.tab === "showcase" && state.role === "admin") renderShowcaseAdmin();
   else if (state.tab === "ai") renderAi();
   else if (state.role === "admin") (state.selected ? renderReview() : renderAdmin());
   else (state.tab === "home" || !state.app ? renderPicker() : renderAwardee());
@@ -324,7 +328,7 @@ function renderHeader() {
   const groups = [];
   if (state.role) {
     groups.push(["", state.role === "admin"
-      ? [["main", "Applicants", "users"]]
+      ? [["main", "Applicants", "users"], ["showcase", "Awardee showcase", "images"]]
       : [["home", "Choose awards", "layout-list"], ["main", `My Awards${myAppList().length ? ` (${myAppList().length})` : ""}`, "award"]]]);
     // Lesson planning and ILAW Assist: admins and all teaching personnel (everyone not set as non-teaching).
     if (state.role === "admin" || myPType() !== "nonteaching") groups.push(["Teacher tools", [["plans", "Lesson planning", "notebook-pen"], ["ai", `ILAW Assist${state.ai && state.ai.me ? ` (${state.ai.me.credits})` : ""}`, "sparkles"]]]);
@@ -456,7 +460,8 @@ function renderAuth() {
           </div>
         </div>
       </div>
-    </section>`;
+    </section>
+    <div id="aw-show">${publicShowcase()}</div>`;
 }
 
 async function handleAuthSubmit(form) {
@@ -3374,6 +3379,141 @@ function renderGuide() {
   </div>`;
 }
 
+// ----- Awardee showcase (sign-in page; admins manage it) -----
+const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.name).localeCompare(String(b.name));
+// Public list: real (non-demo) awardees only. Until there are some, illustrated samples show.
+async function loadAwardees() {
+  try {
+    const snap = await getDocs(query(collection(db, "awardees"), where("demo", "==", false)));
+    state.awardees = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort(byOrder);
+  } catch (e) {
+    state.awardees = [];
+  }
+  const el = document.getElementById("aw-show");
+  if (el) { el.innerHTML = publicShowcase(); reveal(main); }
+}
+function showcaseSub(list) {
+  const years = {};
+  list.forEach((a) => { if (a.year) years[a.year] = (years[a.year] || 0) + 1; });
+  const y = Object.keys(years).sort((a, b) => years[b] - years[a])[0];
+  return `${y ? y + " · " : ""}Teaching and non-teaching personnel honored at the BLESS Awarding.`;
+}
+function publicShowcase() {
+  if (state.awardees === null) return "";
+  return state.awardees.length ? showcaseHTML(state.awardees, { sub: showcaseSub(state.awardees) }) : showcaseHTML(SAMPLE_AWARDEES, { sample: true });
+}
+
+function watchAwardees() {
+  if (state.watches.aw) return;
+  state.watches.aw = onSnapshot(query(collection(db, "awardees"), where("demo", "==", isDemoUser())), (snap) => {
+    state.awAdmin = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort(byOrder);
+    if (!isDemoUser()) state.awardees = state.awAdmin;
+    if (state.tab === "showcase" && $("#modal").classList.contains("hidden")) render();
+  }, (e) => toast(errorText(e), "error"));
+}
+function renderShowcaseAdmin() {
+  watchAwardees();
+  const list = state.awAdmin;
+  const head = `<div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div class="min-w-0"><h2 class="text-[1.6rem] font-bold tracking-tight leading-tight text-brand-950">Awardee showcase</h2>
+        <p class="mt-1 text-[0.92rem] text-brand-600">Last year's awardees on the sign-in page. Photos show in grayscale; hovering reveals the colour photo.</p></div>
+      <button data-act="aw-add" class="${btnDark}"><i data-lucide="plus" class="w-4 h-4"></i>Add awardee</button>
+    </div>`;
+  if (!list) { main.innerHTML = head + panel(empty("Loading…")); return; }
+  const note = isDemoUser()
+    ? `<p class="mb-4 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Demo account: awardees you add here are seen only by demo accounts (in the preview below), not on the public sign-in page.</p>`
+    : `<p class="mb-4 text-xs text-slate-500">Post a photo only with the awardee's consent (Data Privacy Act of 2012). Tip: a cut-out photo (PNG with a transparent background) looks best, like the samples.</p>`;
+  main.innerHTML = head + note + panel(panelHead("Awardees", `<span class="text-sm text-brand-500">${list.length ? list.length + " on the sign-in page" : "None yet: the sign-in page shows the samples"}</span>`) + (list.length
+      ? table(["", "Awardee", "Line", "Order", ""], list.map((a, i) => `<tr>
+          <td class="px-4 py-2.5 w-16"><img src="${esc(a.photo)}" alt="" class="w-11 h-11 rounded-full object-cover bg-[#fc5d3b]"></td>
+          <td class="px-4 py-2.5"><div class="font-semibold text-slate-900">${esc(a.name)}</div><div class="text-xs text-slate-500">${esc(a.award)}${a.year ? " · " + esc(a.year) : ""}${a.photo2 ? " · hover photo" : ""}</div></td>
+          <td class="px-4 py-2.5 text-xs text-slate-600">${esc(a.line)}</td>
+          <td class="px-4 py-2.5 whitespace-nowrap">${i ? iconBtn("aw-up", a.id, "arrow-up", "Move up") : ""}${i < list.length - 1 ? iconBtn("aw-down", a.id, "arrow-down", "Move down") : ""}</td>
+          <td class="px-4 py-2.5 text-right whitespace-nowrap">${iconBtn("aw-edit", a.id, "pencil", "Edit")}${iconBtn("aw-del", a.id, "trash-2", "Delete")}</td></tr>`))
+      : empty("No awardees yet. Click Add awardee.")))
+    + `<div class="mt-6"><div class="text-sm font-bold text-brand-950 mb-2">Preview <span class="font-normal text-brand-500">· hover a photo</span></div>
+      <div class="aw-preview">${list.length ? showcaseHTML(list, { sub: showcaseSub(list) }) : showcaseHTML(SAMPLE_AWARDEES, { sample: true })}</div></div>`;
+}
+
+const awDisc = (src, cut) => src
+  ? `<img src="${esc(src)}" alt="" class="w-24 h-24 rounded-full object-cover ${cut ? "bg-[#fc5d3b]" : ""}">`
+  : `<div class="w-24 h-24 rounded-full bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400"><i data-lucide="image" class="w-6 h-6"></i></div>`;
+function openAwardee(id) {
+  const a = (state.awAdmin || []).find((x) => x.id === id) || {};
+  state.awDraft = { id: a.id || "", photo: a.photo || "", cutout: !!a.cutout, photo2: a.photo2 || "", cutout2: !!a.cutout2 };
+  openModal(`${modalHead(a.id ? "Edit awardee" : "Add awardee", "Shown on the sign-in page.")}
+    <div class="p-6 space-y-3">
+      ${field("aw-name", "Name", "text", `value="${esc(a.name || "")}" maxlength="120" placeholder="e.g. Juan Dela Cruz"`)}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>${lbl("aw-award", "Award")}<input id="aw-award" list="aw-awards" value="${esc(a.award || "")}" maxlength="120" class="w-full ${inputCls}" placeholder="Best Teacher">
+          <datalist id="aw-awards">${AWARD_NAMES.map((n) => `<option value="${esc(n)}">`).join("")}</datalist></div>
+        ${field("aw-year", "School year", "text", `value="${esc(a.year ?? "SY 2025–2026")}" maxlength="40"`)}
+      </div>
+      ${field("aw-line", 'Short line <span class="font-normal text-slate-400">(optional)</span>', "text", `value="${esc(a.line || "")}" maxlength="90" placeholder="e.g. Action research, robotics club, early mornings."`)}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+        <div class="flex items-center gap-3"><div id="aw-p1">${awDisc(state.awDraft.photo, state.awDraft.cutout)}</div>
+          <div class="min-w-0"><div class="text-xs font-semibold text-slate-700">Photo</div><div class="text-[11px] text-slate-500 mb-1.5">Shown in grayscale</div>
+            <label class="${btnLight} !px-3 !py-1.5 !text-xs cursor-pointer">Choose…<input id="aw-file1" data-act="aw-file" data-n="1" type="file" accept="image/*" class="hidden"></label></div></div>
+        <div class="flex items-center gap-3"><div id="aw-p2">${awDisc(state.awDraft.photo2, state.awDraft.cutout2)}</div>
+          <div class="min-w-0"><div class="text-xs font-semibold text-slate-700">Hover photo <span class="font-normal text-slate-400">(optional)</span></div><div class="text-[11px] text-slate-500 mb-1.5">Colour; empty = same photo in colour</div>
+            <label class="${btnLight} !px-3 !py-1.5 !text-xs cursor-pointer">Choose…<input id="aw-file2" data-act="aw-file" data-n="2" type="file" accept="image/*" class="hidden"></label>
+            <button type="button" data-act="aw-clear2" class="ml-1 text-[11px] font-semibold text-slate-500 hover:text-red-700 ${state.awDraft.photo2 ? "" : "hidden"}">Remove</button></div></div>
+      </div>
+      <label class="flex items-start gap-2 pt-2"><input id="aw-consent" type="checkbox" ${a.id ? "checked" : ""} class="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600">
+        <span class="text-xs text-slate-700">The awardee agreed to have this photo posted on the portal's public sign-in page (Data Privacy Act of 2012).</span></label>
+    </div>
+    <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2">
+      <button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+      <button data-act="aw-save" class="${btnDark}">Save</button>
+    </div>`);
+}
+async function awFile(input) {
+  const n = input.dataset.n;
+  try {
+    const { data, cutout } = await resizePhoto(input.files[0]);
+    if (n === "1") Object.assign(state.awDraft, { photo: data, cutout });
+    else Object.assign(state.awDraft, { photo2: data, cutout2: cutout });
+    $("#aw-p" + n).innerHTML = awDisc(data, cutout);
+    if (n === "2") $("[data-act=aw-clear2]").classList.remove("hidden");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+  input.value = "";
+}
+async function saveAwardee() {
+  const d = state.awDraft;
+  const name = val("aw-name"), award = val("aw-award");
+  if (!name || !award) return toast("Enter the name and the award.", "warn");
+  if (!d.photo) return toast("Choose a photo.", "warn");
+  if (!$("#aw-consent").checked) return toast("Confirm the awardee's consent first.", "warn");
+  const list = state.awAdmin || [];
+  const data = { name, award, year: val("aw-year").slice(0, 40), line: val("aw-line").slice(0, 160), photo: d.photo, photo2: d.photo2 || "",
+    cutout: !!d.cutout, cutout2: !!(d.photo2 && d.cutout2), consent: true, demo: isDemoUser(), by: state.user.email, updatedAt: serverTimestamp() };
+  try {
+    if (d.id) await updateDoc(doc(db, "awardees", d.id), data);
+    else await setDoc(doc(collection(db, "awardees")), { ...data, order: list.length ? Math.max(...list.map((x) => x.order || 0)) + 1 : 0, createdAt: serverTimestamp() });
+    closeModal();
+    toast(d.id ? "Awardee updated." : "Awardee added.");
+    render();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+async function moveAwardee(id, step) {
+  const list = state.awAdmin || [];
+  const i = list.findIndex((x) => x.id === id), j = i + step;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  // Renumber everything so equal or missing orders can't get stuck.
+  const next = list.slice();
+  [next[i], next[j]] = [next[j], next[i]];
+  try {
+    const b = writeBatch(db);
+    next.forEach((a, k) => { if (a.order !== k) b.update(doc(db, "awardees", a.id), { order: k, updatedAt: serverTimestamp() }); });
+    await b.commit();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
 // ---------- Events ----------
 document.addEventListener("click", async (e) => {
   if (e.target.closest("[data-close]")) return closeModal();
@@ -3392,7 +3532,30 @@ document.addEventListener("click", async (e) => {
       break;
     case "signout": await signOut(auth); break;
     case "tab": state.tab = el.dataset.tab; render(); break;
-    case "guide-go": {
+    case "aw-tap":
+      // Touch screens have no hover: a tap shows the colour photo.
+      if (matchMedia("(hover: none)").matches) {
+        const on = !el.classList.contains("is-on");
+        document.querySelectorAll(".aw-card.is-on").forEach((c) => c.classList.remove("is-on"));
+        el.classList.toggle("is-on", on);
+      }
+      break;
+    case "aw-add": openAwardee(""); break;
+    case "aw-edit": openAwardee(el.dataset.id); break;
+    case "aw-save": saveAwardee(); break;
+    case "aw-clear2": Object.assign(state.awDraft, { photo2: "", cutout2: false }); $("#aw-p2").innerHTML = awDisc("", false); el.classList.add("hidden"); icons(); break;
+    case "aw-up": moveAwardee(el.dataset.id, -1); break;
+    case "aw-down": moveAwardee(el.dataset.id, 1); break;
+    case "aw-del": {
+      const a = (state.awAdmin || []).find((x) => x.id === el.dataset.id) || {};
+      openModal(`<div class="p-6 space-y-2"><h3 class="text-lg font-bold">Remove this awardee?</h3><p class="text-sm text-slate-600">${esc(a.name || "")} and the photos will be removed from the sign-in page.</p></div>
+        <div class="bg-slate-50 px-6 py-3.5 border-t border-slate-200 flex justify-end gap-2"><button data-close class="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">Cancel</button>
+        <button data-act="aw-del-yes" data-id="${esc(el.dataset.id)}" class="inline-flex items-center px-3.5 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold">Remove</button></div>`);
+      break;
+    }
+    case "aw-del-yes":
+      try { await deleteDoc(doc(db, "awardees", el.dataset.id)); closeModal(); toast("Awardee removed."); } catch (err) { toast(errorText(err), "error"); }
+      break;    case "guide-go": {
       const d = document.getElementById(`guide-${el.dataset.id}`);
       if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
       break;
@@ -3533,6 +3696,7 @@ document.addEventListener("change", (e) => {
   const el = e.target;
   switch (el.dataset.act) {
     case "verify": setVerified({ [el.dataset.key]: el.checked }); break;
+    case "aw-file": awFile(el); break;
     case "decision": (state.drafts[state.selected] ||= {}).status = el.value; render(); break;
     case "filter": state.filter[el.dataset.f] = el.value; render(); break;
     case "assign": assignChecker(el.dataset.uid, el.value); break;

@@ -16,6 +16,7 @@ rules_version = '2';
 //   aor/{week}            Cleanest classroom per week, top 3 per grade level 7–12 (week = Monday; demo-<week> for demo accounts). School Clinic only.
 //   dll/{week}_{pid}      ILAW (lesson plan) check per teacher per week. Head/Master Teachers, own subjects.
 //   ilaw/{id}             ILAW lesson plans written by teachers (Teacher tools → Lesson planning).
+//   awardees/{id}         Last year's awardees on the public sign-in page (photos as data URLs). Admins only; demo: true for demo admins.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -230,6 +231,21 @@ service cloud.firestore {
         && request.resource.data.status in ['ontime', 'late', 'missing']
         && str(request.resource.data.remarks, 300);
       allow delete: if mySubject(resource.data.subject) && demoOk(resource.data);
+    }
+    // Awardee showcase on the sign-in page: anyone may read real entries; admins add them. Demo admins'
+    // entries carry demo: true and are seen only by signed-in admins (the public page reads demo == false).
+    function photoOk(p) { return p is string && p.size() <= 360000 && p.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'); }
+    function awardeeOk(d) {
+      return d.keys().hasOnly(['name', 'award', 'year', 'line', 'photo', 'photo2', 'cutout', 'cutout2', 'order', 'demo', 'consent', 'by', 'createdAt', 'updatedAt'])
+        && str(d.name, 120) && d.name.size() > 0 && str(d.award, 120) && d.award.size() > 0 && str(d.year, 40) && str(d.line, 160)
+        && photoOk(d.photo) && (d.photo2 == '' || photoOk(d.photo2)) && d.cutout is bool && d.cutout2 is bool
+        && d.order is int && d.consent == true && d.demo == isDemo();
+    }
+    match /awardees/{id} {
+      allow read: if resource.data.demo == false || isAdmin();
+      allow create: if isAdmin() && awardeeOk(request.resource.data);
+      allow update: if isAdmin() && demoOk(resource.data) && resource.data.demo == isDemo() && awardeeOk(request.resource.data);
+      allow delete: if isAdmin() && demoOk(resource.data) && resource.data.demo == isDemo();
     }
   }
 }
