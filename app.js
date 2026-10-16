@@ -147,7 +147,7 @@ const state = {
   // Monitoring (see the Monitoring section below)
   awardees: null, awAdmin: null, awDraft: null,
   ai: null, perms: null, mon: null, rep: null, score: null, request: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", me: null, meLoaded: false,
-  personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
+  sections: null, personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
 };
 let auth, db;
 
@@ -171,7 +171,7 @@ async function onUser(u) {
     user: u, role: null, profile: null, app: null, review: null, loaded: false, myApps: {}, myReviews: {}, cur: null,
     apps: {}, reviews: {}, selected: null, drafts: {}, tab: "main", unsubs: [], linkDrafts: {}, folderDraft: null, folderCheck: null, checking: false,
     ai: null, myPlans: {}, planId: null, planEdit: null, weekPlans: {}, plansKey: "", perms: null, mon: freshMon(), rep: freshRep(), score: { from: schoolYearStart(), to: todayIso(), ptype: "teaching", key: "", loading: false }, request: null, me: null, meLoaded: false,
-    personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
+    sections: null, personnel: {}, attendance: {}, aor: {}, dll: {}, monitors: {}, requests: {}, dllDrafts: {}, watches: {}
   });
   if (!u) { state.authMode = "login"; return render(); }
   if (!u.emailVerified) return render();
@@ -1603,6 +1603,7 @@ function startMonitoring() {
   const p = state.perms;
   if (!p) return;
   if (p.hr || p.dll) watch("personnel", query(collection(db, "personnel"), ...demoOnly()), (d) => { state.personnel = d; });
+  if (p.clinic || p.hr) watchSections();
   if (p.clinic) watch("aor", query(collection(db, "aor"), ...demoOnly()), (d) => {
     state.aor = Object.fromEntries(Object.values(d).filter((x) => isDay(x.week) && !!x.demo === isDemoUser()).map((x) => [x.week, x]));
   });
@@ -2088,6 +2089,7 @@ function monAor() {
       ${wk !== now ? `<button data-act="aor-wk-now" class="${btnLight}">This week</button>` : ""}
       <span class="text-sm ${done === GRADES.length ? "text-emerald-700 font-semibold" : "text-slate-500"}">${done} of ${GRADES.length} grade levels rated</span>
       <div class="flex-1"></div>
+      <button data-act="aor-sections" class="${btnLight}"><i data-lucide="list" class="w-4 h-4"></i>Sections</button>
       <button data-act="aor-edit" data-id="${wk}" class="${btnDark}"><i data-lucide="${cur ? "pencil" : "trophy"}" class="w-4 h-4"></i>${cur ? "Edit this week" : "Rate this week"}</button>
       ${cur ? delBtn("aor", wk) : ""}
     </div>
@@ -2108,20 +2110,20 @@ function openAor(week) {
   const w = isDay(week) ? mondayOf(week) : mondayOf(todayIso());
   const res = aorGrades(state.aor[w]);
   const all = Object.values(state.aor);
-  const roomsOf = (g) => [...new Set(all.flatMap((x) => PLACES.map(([k]) => (aorGrades(x)[g] || {})[k]).filter(Boolean)))].sort();
+  if (!GRADES.some((g) => sectionsOf(g).length)) return openSections(true);
   openModal(`${modalHead("AOR · Cleanest classroom", "School Clinic · top 3 classrooms per grade level this week")}
     <div class="p-6 space-y-4">
       <div>${lbl("aor-week", "Any day of the week")}
         <input id="aor-week" type="date" data-act="aor-week" value="${w}" class="w-full ${inputCls}">
         <p id="aor-week-label" class="text-xs font-semibold text-brand-900 mt-1">Week of ${fmtWeek(w)}</p></div>
-      <p class="text-xs text-slate-500">Fill in the grade levels you rated. 2nd and 3rd place are optional.</p>
+      <p class="text-xs text-slate-500">Choose the sections for the grade levels you rated. 2nd and 3rd place are optional. A section is missing? <button type="button" data-act="aor-sections" class="font-semibold text-depedGold-500 hover:underline">Edit sections</button></p>
       ${GRADES.map((g) => `<fieldset class="rounded-lg border border-black/10 p-3">
         <legend class="px-1 text-sm font-bold text-brand-950">Grade ${g}</legend>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
           ${PLACES.map(([k, text, medal]) => `<div><label for="aor-${g}-${k}" class="block text-[11px] font-semibold text-slate-600 mb-0.5">${medal} ${text}</label>
-            <input id="aor-${g}-${k}" list="aor-rooms-${g}" maxlength="80" value="${esc((res[g] || {})[k] || "")}" placeholder="Grade ${g} – section" class="w-full ${inputCls}"></div>`).join("")}
+            ${sectionSelect(`aor-${g}-${k}`, g, (res[g] || {})[k] || "")}</div>`).join("")}
         </div>
-        <datalist id="aor-rooms-${g}">${roomsOf(g).map((x) => `<option value="${esc(x)}"></option>`).join("")}</datalist>
+        ${sectionsOf(g).length ? "" : `<p class="mt-1.5 text-[11px] text-amber-700">No Grade ${g} sections yet. Add them under Sections.</p>`}
       </fieldset>`).join("")}
       <div>${lbl("aor-remarks", 'Remarks <span class="font-normal text-slate-400">(optional)</span>')}
         <textarea id="aor-remarks" rows="2" maxlength="300" class="w-full ${inputCls} resize-y">${esc((state.aor[w] || {}).remarks || "")}</textarea></div>
@@ -2129,12 +2131,61 @@ function openAor(week) {
     ${modalFoot("aor-save", "Save ratings")}`);
 }
 
+// ----- Sections per grade level (settings/sections), chosen in the AOR ratings -----
+// Stored as section names per grade; an AOR place is saved as "Grade 7 – Rosal" (the same form as advisory classes).
+const roomName = (g, s) => `Grade ${g} – ${s}`;
+const sectionsOf = (g) => ((state.sections && state.sections[g]) || []);
+function watchSections() {
+  if (state.watches.sections) return;
+  state.watches.sections = onSnapshot(doc(db, "settings", "sections"), (snap) => {
+    state.sections = snap.exists() ? (snap.data().grades || {}) : {};
+    if ($("#modal").classList.contains("hidden")) render();
+  }, (e) => toast(errorText(e), "error"));
+}
+function sectionSelect(id, g, value) {
+  const opts = sectionsOf(g).map((s) => roomName(g, s));
+  if (value && !opts.some((o) => roomKey(o) === roomKey(value))) opts.unshift(value); // an older entry not in the list
+  const cur = opts.find((o) => roomKey(o) === roomKey(value)) || "";
+  return `<select id="${id}" class="w-full ${inputCls}"><option value="">—</option>${opts.map((o) => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${esc(o.replace(/^Grade \d+ – /, ""))}</option>`).join("")}</select>`;
+}
+// Sections editor: one section per line for each grade. First time, it's filled with names already used.
+function openSections(first) {
+  const used = (g) => [...new Set([
+    ...Object.values(state.aor).flatMap((x) => PLACES.map(([k]) => (aorGrades(x)[g] || {})[k]).filter(Boolean)),
+    ...Object.values(state.personnel || {}).map((p) => p.advisory).filter((a) => (String(a).match(/grade\s*(\d{1,2})/i) || [])[1] === g)
+  ].map((r) => String(r).replace(/^\s*grade\s*\d{1,2}\s*[-–—:]?\s*/i, "").trim()).filter(Boolean))];
+  openModal(`${modalHead("Sections per grade level", "The School Clinic chooses from these when rating the cleanest classrooms. One section per line.")}
+    <div class="p-6 space-y-3">
+      ${first ? `<p class="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Add the sections first, then rate the week.</p>` : ""}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${GRADES.map((g) => `<div>${lbl(`sec-${g}`, `Grade ${g}`)}
+        <textarea id="sec-${g}" rows="5" class="w-full ${inputCls} resize-y" placeholder="e.g.&#10;Rosal&#10;Sampaguita">${esc((sectionsOf(g).length ? sectionsOf(g) : used(g)).join("\n"))}</textarea></div>`).join("")}</div>
+    </div>
+    ${modalFoot("sections-save", "Save sections")}`);
+}
+async function saveSections() {
+  const grades = {};
+  for (const g of GRADES) {
+    const list = [...new Set(val(`sec-${g}`).split("\n").map((x) => x.replace(/^\s*grade\s*\d{1,2}\s*[-–—:]?\s*/i, "").replace(/\s+/g, " ").trim().slice(0, 60)).filter(Boolean))];
+    if (list.length > 40) return toast(`Grade ${g}: up to 40 sections.`, "warn");
+    grades[g] = list;
+  }
+  try {
+    await setDoc(doc(db, "settings", "sections"), { grades, by: state.user.email, updatedAt: serverTimestamp() });
+    state.sections = grades;
+    closeModal();
+    toast("Sections saved.");
+    render();
+  } catch (e) {
+    toast(errorText(e), "error");
+  }
+}
+
 function aorWeekChanged(value) {
   if (!isDay(value)) return;
   const w = mondayOf(value);
   $("#aor-week-label").textContent = `Week of ${fmtWeek(w)}`;
   const r = state.aor[w];
-  if (!r) return; // keep whatever was typed
+  if (!r) return; // keep whatever was chosen
   const res = aorGrades(r);
   GRADES.forEach((g) => PLACES.forEach(([k]) => { $(`#aor-${g}-${k}`).value = (res[g] || {})[k] || ""; }));
   $("#aor-remarks").value = r.remarks || "";
@@ -2148,13 +2199,13 @@ async function saveAor() {
   for (const g of GRADES) {
     const [first, second, third] = PLACES.map(([k]) => val(`aor-${g}-${k}`).replace(/\s+/g, " ").slice(0, 80));
     if (!first && !second && !third) continue;
-    if (!first) return toast(`Grade ${g}: enter the 1st place classroom.`, "warn");
+    if (!first) return toast(`Grade ${g}: choose the 1st place section.`, "warn");
     if (third && !second) return toast(`Grade ${g}: fill in 2nd place before 3rd.`, "warn");
     const named = [first, second, third].filter(Boolean).map((x) => x.toLowerCase());
     if (new Set(named).size !== named.length) return toast(`Grade ${g}: a classroom can only take one place.`, "warn");
     grades[g] = { first, second, third };
   }
-  if (!Object.keys(grades).length) return toast("Enter the 1st place classroom for at least one grade level.", "warn");
+  if (!Object.keys(grades).length) return toast("Choose the 1st place section for at least one grade level.", "warn");
   try {
     await setDoc(doc(db, "aor", aorDocId(week)), { week, grades, remarks: val("aor-remarks").slice(0, 300), by: state.user.email, updatedAt: serverTimestamp(), ...demoMark() });
     state.mon.aorWeek = week;
@@ -2766,7 +2817,7 @@ const SCORE_W = { att: 40, ilaw: 40, aor: 20 };
 const ILAW_PTS = { ontime: 100, late: 50, missing: 0 };
 const NOT_ABSENT = ["Official business / official time"];
 const roomKey = (r) => String(r || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-const aorRooms = () => [...new Set(Object.values(state.aor).flatMap((w) => GRADES.flatMap((g) => PLACES.map(([k]) => (aorGrades(w)[g] || {})[k]).filter(Boolean))))].sort();
+const aorRooms = () => [...new Set([...GRADES.flatMap((g) => sectionsOf(g).map((s) => roomName(g, s))), ...Object.values(state.aor).flatMap((w) => GRADES.flatMap((g) => PLACES.map(([k]) => (aorGrades(w)[g] || {})[k]).filter(Boolean)))])].sort();
 const round1 = (n) => Math.round(n * 10) / 10;
 
 async function loadScores() {
@@ -3643,6 +3694,8 @@ document.addEventListener("click", async (e) => {
     case "att-edit": openAttendance(el.dataset.id); break;
     case "att-save": saveAttendance(el.dataset.id); break;
     case "aor-edit": openAor(el.dataset.id); break;
+    case "aor-sections": openSections(false); break;
+    case "sections-save": saveSections(); break;
     case "aor-save": saveAor(); break;
     case "dll-week": setDllWeek(addDays(state.mon.week, Number(el.dataset.step))); break;
     case "dll-today": setDllWeek(mondayOf(todayIso())); break;

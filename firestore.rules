@@ -181,6 +181,15 @@ service cloud.firestore {
         && str(request.resource.data.remarks, 500);
     }
 
+    // Sections per grade level (settings/sections): the School Clinic picks from these in the AOR ratings.
+    match /settings/sections {
+      allow read: if can('clinic') || can('dll');
+      allow write: if can('clinic') && !isDemo()
+        && request.resource.data.keys().hasOnly(['grades', 'by', 'updatedAt'])
+        && request.resource.data.grades is map && request.resource.data.grades.keys().hasOnly(['7', '8', '9', '10', '11', '12'])
+        && request.resource.data.grades.values().size() <= 6;
+    }
+
     // One rating per week: ID = the week (Monday). Demo accounts use demo-<week> with demo: true.
     match /aor/{id} {
       allow read, delete: if can('clinic') && demoOk(resource.data);
