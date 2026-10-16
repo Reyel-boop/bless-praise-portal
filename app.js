@@ -3554,7 +3554,7 @@ document.addEventListener("click", async (e) => {
       break;
     }
     case "aw-del-yes":
-      try { await deleteDoc(doc(db, "awardees", el.dataset.id)); closeModal(); toast("Awardee removed."); } catch (err) { toast(errorText(err), "error"); }
+      try { await deleteDoc(doc(db, "awardees", el.dataset.id)); closeModal(); toast("Awardee removed."); render(); } catch (err) { toast(errorText(err), "error"); }
       break;    case "guide-go": {
       const d = document.getElementById(`guide-${el.dataset.id}`);
       if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
