@@ -222,11 +222,11 @@ export const GUIDE_SECTIONS = [
   { id: "budget", title: "Estimated expenditures", body: `
     ${p("Source of funds: Local Funds")}
     ${table(["Item of expenditure", "Unit cost", "# Required", "Sub-total"], [
-      ["Certificates", "20", "50", "0"],
+      ["Certificates", "20", "50", "1,000"],
       ["Tokens", "40", "50", "3,000"],
       ["Certificate holders", "40", "50", "2,000"],
       ["Transportation", "", "", "200"],
-      ["Total", "", "", "5,000"]
+      ["Total", "", "", "6,200"]
     ], { num: [1, 2, 3] })}` },
 
   { id: "signatories", title: "Signatories", body: table(["", "Name", "Position"], [
@@ -238,6 +238,6 @@ export const GUIDE_SECTIONS = [
     ["Noted by", "EMELI P. INFIESTO", "JHS Academic Head/Member"],
     ["", "ALMA B. PICOT", "SHS Academic Head/Member"],
     ["Approved by", "MICHAEL S. RUBINO", "Assistant to the School Principal"],
-    ["", "BEHNJO S. MARTIN", "Principal III"]
+    ["", "BEHNJO S. MARTIN", "Principal I"]
   ]) }
 ];
